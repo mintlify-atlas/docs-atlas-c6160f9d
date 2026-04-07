@@ -1,0 +1,113 @@
+---
+title: "HTTP API overview"
+description: "Reference for the Dapr sidecar HTTP API — base URLs, versioning, common headers, and status codes."
+---
+
+The Dapr sidecar exposes an HTTP API that your application calls to use Dapr building blocks. All requests are made to the **local sidecar process** — your application never calls remote services directly.
+
+## Base URL
+
+```
+http://localhost:3500
+```
+
+The default port is `3500`. Override it with the `--dapr-http-port` flag when running `dapr run`, or with the `daprHTTPPort` field in your Dapr configuration.
+
+## API versioning
+
+Dapr uses URL-based versioning. Three stability tiers exist:
+
+| Prefix | Stability | Example |
+|---|---|---|
+| `/v1.0/` | Stable | `/v1.0/state/mystore/key` |
+| `/v1.0-beta1/` | Beta — may change between minor releases | `/v1.0-beta1/workflows/dapr/myinstance` |
+| `/v1.0-alpha1/` | Alpha — may change or be removed at any time | `/v1.0-alpha1/lock/mystore` |
+
+<Note>
+  Alpha and beta APIs are fully functional but are not yet subject to the same stability guarantees as stable APIs. Production workloads should prefer stable (`v1.0`) APIs wherever available.
+</Note>
+
+## Common request headers
+
+| Header | Description |
+|---|---|
+| `Content-Type: application/json` | Required for requests that include a JSON body. |
+| `dapr-api-token` | Required when API token authentication is enabled on the sidecar. Set the `DAPR_API_TOKEN` environment variable on the sidecar to enable this. |
+| `If-Match` | Used for optimistic concurrency with ETag values (state management). |
+
+## Common response headers
+
+| Header | Description |
+|---|---|
+| `ETag` | Returned by state `GET` endpoints when the store supports ETags. |
+| `metadata.*` | Component-specific metadata returned as response headers prefixed with `metadata.`. |
+
+## HTTP status codes
+
+| Code | Meaning |
+|---|---|
+| `200 OK` | Request succeeded and a body is returned. |
+| `201 Created` | Resource was created. |
+| `202 Accepted` | Request accepted for asynchronous processing (e.g., workflow operations). |
+| `204 No Content` | Request succeeded with no response body. |
+| `400 Bad Request` | Malformed request, missing required parameters, or invalid input. |
+| `401 Unauthorized` | API token is missing or invalid. |
+| `403 Forbidden` | Request is denied by an access-control policy (e.g., service invocation ACL or secret scoping). |
+| `404 Not Found` | The requested resource does not exist. |
+| `500 Internal Server Error` | The sidecar or a downstream component encountered an error. |
+
+## Error response format
+
+Non-2xx responses include a JSON error body:
+
+```json
+{
+  "errorCode": "ERR_STATE_GET",
+  "message": "fail to get mykey from state store mystore: <reason>"
+}
+```
+
+## API groups
+
+<CardGroup cols={2}>
+  <Card title="Service invocation" href="/api/http/service-invocation">
+    Invoke methods on other Dapr-enabled services using HTTP or gRPC.
+  </Card>
+  <Card title="State management" href="/api/http/state">
+    Get, save, delete, and query key/value state with consistency and concurrency options.
+  </Card>
+  <Card title="Pub/Sub" href="/api/http/pub-sub">
+    Publish messages to topics and receive them via subscriptions.
+  </Card>
+  <Card title="Actors" href="/api/http/actors">
+    Invoke actor methods, manage actor state, and schedule reminders and timers.
+  </Card>
+  <Card title="Workflows" href="/api/http/workflows">
+    Start, query, pause, resume, terminate, and purge workflow instances.
+  </Card>
+  <Card title="Secrets" href="/api/http/secrets">
+    Retrieve secrets from configured secret stores with optional scoping.
+  </Card>
+  <Card title="Bindings" href="/api/http/bindings">
+    Invoke output bindings to interact with external systems.
+  </Card>
+  <Card title="Distributed lock" href="/api/http/distributed-lock">
+    Acquire and release distributed locks backed by a lock store component.
+  </Card>
+  <Card title="Cryptography" href="/api/http/cryptography">
+    Encrypt, decrypt, wrap keys, sign, and verify data using crypto components.
+  </Card>
+  <Card title="Configuration" href="/api/http/configuration">
+    Read configuration items and subscribe to live configuration updates.
+  </Card>
+  <Card title="Metadata" href="/api/http/metadata">
+    Inspect sidecar metadata, set custom attributes, and check health.
+  </Card>
+  <Card title="Conversation" href="/api/http/conversation">
+    Send prompts to large language models via the AI Conversation API with built-in PII scrubbing.
+  </Card>
+</CardGroup>
+
+## Rate limiting
+
+Dapr does not implement rate limiting in the sidecar HTTP API. Apply rate limiting at the network layer (e.g., an ingress controller or service mesh) if required.

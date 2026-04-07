@@ -1,0 +1,137 @@
+---
+title: "Bindings API"
+description: "Invoke output bindings to interact with external systems such as queues, databases, and messaging services."
+---
+
+The Bindings API allows your application to invoke **output bindings** — Dapr components that push data to external systems (SQS queues, Kafka topics, SMTP servers, Twilio, etc.). Dapr also delivers **input binding** events to your application via HTTP callbacks, but those are initiated by Dapr, not your app.
+
+## Endpoints
+
+| Method | Path | Version | Description |
+|---|---|---|---|
+| `POST` `PUT` | `/v1.0/bindings/{name}` | v1.0 | Invoke an output binding operation. |
+
+---
+
+## Invoke an output binding
+
+```
+POST http://localhost:3500/v1.0/bindings/{name}
+```
+
+Sends data to the named output binding component and triggers the specified operation.
+
+### Path parameters
+
+<ParamField path="name" type="string" required>
+  The name of the output binding component as declared in your Dapr component YAML.
+</ParamField>
+
+### Request body
+
+<ParamField body="data" type="any" required>
+  The data payload to send. The format is component-specific. For most components, this is a JSON object or string.
+</ParamField>
+
+<ParamField body="operation" type="string" required>
+  The operation to perform. Common operations include `create`, `get`, `list`, and `delete`, but the supported operations depend on the binding component. Check your component's documentation for valid values.
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  Key/value metadata pairs forwarded to the binding component. Supported metadata keys are component-specific.
+</ParamField>
+
+```json
+{
+  "data": {
+    "orderId": "1001",
+    "customer": "Alice",
+    "total": 49.99
+  },
+  "operation": "create",
+  "metadata": {
+    "partitionKey": "orders"
+  }
+}
+```
+
+### Response
+
+- `200 OK` — the binding returned a response body (component-specific content).
+- `204 No Content` — the operation succeeded with no response body.
+
+The response body format is component-specific. For example, a storage binding's `get` operation returns the stored object, while a Kafka binding's `create` returns nothing.
+
+### Example
+
+```bash
+# Send a message to an AWS SQS queue
+curl -X POST http://localhost:3500/v1.0/bindings/orders-queue \
+  -H "Content-Type: application/json" \
+  -d '{
+    "data": {"orderId": "1001"},
+    "operation": "create"
+  }'
+
+# Send an email via an SMTP binding
+curl -X POST http://localhost:3500/v1.0/bindings/sendgrid-email \
+  -H "Content-Type: application/json" \
+  -d '{
+    "data": "Order 1001 has shipped.",
+    "operation": "create",
+    "metadata": {
+      "emailTo": "customer@example.com",
+      "subject": "Your order has shipped"
+    }
+  }'
+```
+
+### Error codes
+
+| Status | Description |
+|---|---|
+| `200` | Binding invoked successfully; response body contains component output. |
+| `204` | Binding invoked successfully; no response body. |
+| `400` | Malformed request body. |
+| `404` | Binding component not found or not configured. |
+| `500` | Binding component error. |
+
+---
+
+## Common operations
+
+The following operations are supported by many (but not all) binding components:
+
+| Operation | Description |
+|---|---|
+| `create` | Create or send a record (write to a queue, send a message, create a file). |
+| `get` | Retrieve a record from the binding. |
+| `list` | List records from the binding. |
+| `delete` | Delete a record from the binding. |
+
+<Note>
+  Not all binding components support all operations. Refer to the documentation for your specific component to find out which operations are available.
+</Note>
+
+---
+
+## Input bindings (inbound)
+
+Dapr delivers input binding events to your application by calling a route on your app. The route is the binding component name:
+
+```
+POST /{binding-name}
+```
+
+Dapr sends the event data as the request body. Your application must return `200 OK` to acknowledge the event. Any other status code causes Dapr to retry delivery.
+
+### Input binding delivery body
+
+```json
+{
+  "data": "<component-specific payload>",
+  "metadata": {
+    "key1": "value1"
+  }
+}
+```

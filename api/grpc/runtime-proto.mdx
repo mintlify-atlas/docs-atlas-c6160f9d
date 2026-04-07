@@ -1,0 +1,867 @@
+---
+title: "Runtime proto reference"
+description: "Complete method reference for the dapr.proto.runtime.v1.Dapr and dapr.proto.runtime.v1.AppCallback gRPC services."
+keywords: ["grpc", "proto", "dapr", "appcallback", "runtime", "reference", "rpc", "protobuf"]
+---
+
+Full method reference for the two service interfaces exposed by the Dapr sidecar over gRPC. Proto source files are available at [github.com/dapr/dapr/tree/master/dapr/proto/runtime/v1](https://github.com/dapr/dapr/tree/master/dapr/proto/runtime/v1).
+
+<Note>
+  Method names ending in `Alpha1` or `Alpha2` are experimental. Methods ending in `Beta1` are in beta. Unmarked methods are stable.
+</Note>
+
+---
+
+## `Dapr` service
+
+**Full name:** `dapr.proto.runtime.v1.Dapr`
+
+Your application calls this service on its local sidecar (`localhost:50001`).
+
+### Service invocation
+
+<AccordionGroup>
+  <Accordion title="InvokeService — invoke a method on a remote app">
+    Invokes a method on another Dapr-enabled application by app ID.
+
+    <Warning>
+      `InvokeService` is deprecated. Use proxy mode service invocation instead — send your request directly through the gRPC proxy without calling this method.
+    </Warning>
+
+    ```protobuf
+    rpc InvokeService(InvokeServiceRequest) returns (common.v1.InvokeResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `InvokeServiceRequest` | Target app ID and the inner `common.v1.InvokeRequest` |
+    | Response | `common.v1.InvokeResponse` | Data and content type returned by the target app |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/InvokeService`
+  </Accordion>
+</AccordionGroup>
+
+### State management
+
+<AccordionGroup>
+  <Accordion title="GetState — read a single key">
+    Returns the value and ETag for a key in a state store.
+
+    ```protobuf
+    rpc GetState(GetStateRequest) returns (GetStateResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `GetStateRequest` | `store_name`, `key`, optional `consistency`, optional `metadata` |
+    | Response | `GetStateResponse` | `data` (bytes), `etag`, `metadata`, `error` |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/GetState`
+  </Accordion>
+
+  <Accordion title="GetBulkState — read multiple keys at once">
+    Returns values for a list of keys in a single call.
+
+    ```protobuf
+    rpc GetBulkState(GetBulkStateRequest) returns (GetBulkStateResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `GetBulkStateRequest` | `store_name`, repeated `keys`, optional `parallelism`, optional `metadata` |
+    | Response | `GetBulkStateResponse` | Repeated `BulkStateItem` (key, data, etag, metadata, error) |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/GetBulkState`
+  </Accordion>
+
+  <Accordion title="SaveState — write one or more key-value pairs">
+    Saves a list of state entries to the store. Each entry can specify its own ETag and consistency options.
+
+    ```protobuf
+    rpc SaveState(SaveStateRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `SaveStateRequest` | `store_name`, repeated `StateItem` (key, value, etag, options, metadata) |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/SaveState`
+  </Accordion>
+
+  <Accordion title="DeleteState — delete a single key">
+    Deletes the value for a key in the state store.
+
+    ```protobuf
+    rpc DeleteState(DeleteStateRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `DeleteStateRequest` | `store_name`, `key`, optional `etag`, optional `options`, optional `metadata` |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/DeleteState`
+  </Accordion>
+
+  <Accordion title="DeleteBulkState — delete multiple keys">
+    Deletes a batch of keys from the state store in a single call.
+
+    ```protobuf
+    rpc DeleteBulkState(DeleteBulkStateRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `DeleteBulkStateRequest` | `store_name`, repeated `StateItem` |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/DeleteBulkState`
+  </Accordion>
+
+  <Accordion title="ExecuteStateTransaction — atomic multi-operation transaction">
+    Executes a set of state operations (upsert or delete) as an atomic transaction against a transactional state store.
+
+    ```protobuf
+    rpc ExecuteStateTransaction(ExecuteStateTransactionRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `ExecuteStateTransactionRequest` | `store_name`, repeated `TransactionalStateOperation`, optional `metadata` |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/ExecuteStateTransaction`
+  </Accordion>
+
+  <Accordion title="QueryStateAlpha1 — query state with filtering and sorting (alpha)">
+    Executes a structured query against a state store that supports the query API.
+
+    ```protobuf
+    rpc QueryStateAlpha1(QueryStateRequest) returns (QueryStateResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `QueryStateRequest` | `store_name`, `query` (JSON string), optional `metadata` |
+    | Response | `QueryStateResponse` | Repeated `QueryStateItem`, `token` for pagination, `metadata` |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/QueryStateAlpha1`
+  </Accordion>
+</AccordionGroup>
+
+### Pub/sub messaging
+
+<AccordionGroup>
+  <Accordion title="PublishEvent — publish a message to a topic">
+    Publishes an event to a topic on the specified pub/sub component. Dapr wraps the payload in a CloudEvent envelope unless `rawPayload=true` metadata is set.
+
+    ```protobuf
+    rpc PublishEvent(PublishEventRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `PublishEventRequest` | `pubsub_name`, `topic`, `data` (bytes), `data_content_type`, optional `metadata` |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/PublishEvent`
+  </Accordion>
+
+  <Accordion title="BulkPublishEventAlpha1 — publish multiple events in one call (deprecated alpha)">
+    Publishes a batch of events to a topic. Superseded by `BulkPublishEvent`.
+
+    <Warning>
+      `BulkPublishEventAlpha1` is deprecated. Use `BulkPublishEvent` (stable) instead.
+    </Warning>
+
+    ```protobuf
+    rpc BulkPublishEventAlpha1(BulkPublishRequest) returns (BulkPublishResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `BulkPublishRequest` | `pubsub_name`, `topic`, repeated `BulkPublishRequestEntry`, optional `metadata` |
+    | Response | `BulkPublishResponse` | Repeated `BulkPublishResponseFailedEntry` for entries that failed |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/BulkPublishEventAlpha1`
+  </Accordion>
+
+  <Accordion title="SubscribeTopicEventsAlpha1 — streaming topic subscription (alpha)">
+    Opens a bidirectional gRPC stream. The client first sends an `InitialRequest` with the subscription details, then receives `TopicEventRequest` messages from Dapr as events arrive on the topic. The client acknowledges each event by sending a `TopicEventResponse` back over the stream.
+
+    ```protobuf
+    rpc SubscribeTopicEventsAlpha1(stream SubscribeTopicEventsRequestAlpha1)
+        returns (stream SubscribeTopicEventsResponseAlpha1);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Client → Dapr | `SubscribeTopicEventsRequestAlpha1` | Initial subscribe request, then per-event `TopicEventResponse` acks |
+    | Dapr → Client | `SubscribeTopicEventsResponseAlpha1` | Stream of `TopicEventRequest` payloads |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/SubscribeTopicEventsAlpha1`
+
+    <Tip>
+      This streaming subscription is an alternative to implementing the `AppCallback.OnTopicEvent` server endpoint. Use it when you prefer a client-initiated subscription model.
+    </Tip>
+  </Accordion>
+</AccordionGroup>
+
+### Input/output bindings
+
+<AccordionGroup>
+  <Accordion title="InvokeBinding — trigger an output binding">
+    Invokes an output binding with the given data and operation.
+
+    ```protobuf
+    rpc InvokeBinding(InvokeBindingRequest) returns (InvokeBindingResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `InvokeBindingRequest` | `name` (binding name), `data` (bytes), `metadata`, `operation` |
+    | Response | `InvokeBindingResponse` | `data` (bytes), `metadata` |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/InvokeBinding`
+  </Accordion>
+</AccordionGroup>
+
+### Secrets
+
+<AccordionGroup>
+  <Accordion title="GetSecret — retrieve a named secret">
+    Returns a secret from the specified secret store.
+
+    ```protobuf
+    rpc GetSecret(GetSecretRequest) returns (GetSecretResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `GetSecretRequest` | `store_name`, `key`, optional `metadata` |
+    | Response | `GetSecretResponse` | `data` (map of string → string) |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/GetSecret`
+  </Accordion>
+
+  <Accordion title="GetBulkSecret — retrieve all secrets from a store">
+    Returns all secrets accessible from the specified secret store in a single call.
+
+    ```protobuf
+    rpc GetBulkSecret(GetBulkSecretRequest) returns (GetBulkSecretResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `GetBulkSecretRequest` | `store_name`, optional `metadata` |
+    | Response | `GetBulkSecretResponse` | `data` (map of secret name → `SecretResponse`) |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/GetBulkSecret`
+  </Accordion>
+</AccordionGroup>
+
+### Configuration
+
+<AccordionGroup>
+  <Accordion title="GetConfigurationAlpha1 — read configuration items (alpha)">
+    Returns configuration items from the specified configuration store. Stable version: `GetConfiguration`.
+
+    ```protobuf
+    rpc GetConfigurationAlpha1(GetConfigurationRequest) returns (GetConfigurationResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `GetConfigurationRequest` | `store_name`, repeated `keys`, optional `metadata` |
+    | Response | `GetConfigurationResponse` | `items` (map of key → `ConfigurationItem`) |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/GetConfigurationAlpha1`
+  </Accordion>
+
+  <Accordion title="SubscribeConfigurationAlpha1 — stream configuration changes (alpha)">
+    Opens a server-streaming RPC that pushes updated configuration items whenever they change in the store. Stable version: `SubscribeConfiguration`.
+
+    ```protobuf
+    rpc SubscribeConfigurationAlpha1(SubscribeConfigurationRequest)
+        returns (stream SubscribeConfigurationResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `SubscribeConfigurationRequest` | `store_name`, repeated `keys`, optional `metadata` |
+    | Response (stream) | `SubscribeConfigurationResponse` | `id` (subscription ID), `items` (map of key → `ConfigurationItem`) |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/SubscribeConfigurationAlpha1`
+  </Accordion>
+
+  <Accordion title="UnsubscribeConfigurationAlpha1 — cancel a configuration subscription (alpha)">
+    Cancels a previously created configuration subscription identified by its subscription ID. Stable version: `UnsubscribeConfiguration`.
+
+    ```protobuf
+    rpc UnsubscribeConfigurationAlpha1(UnsubscribeConfigurationRequest)
+        returns (UnsubscribeConfigurationResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `UnsubscribeConfigurationRequest` | `store_name`, `id` (subscription ID) |
+    | Response | `UnsubscribeConfigurationResponse` | `ok` (bool), `message` |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/UnsubscribeConfigurationAlpha1`
+  </Accordion>
+</AccordionGroup>
+
+### Actors
+
+<AccordionGroup>
+  <Accordion title="InvokeActor — call a method on an actor">
+    Invokes a method on a virtual actor instance. Dapr routes the call to the host that owns the actor, activating it if necessary.
+
+    ```protobuf
+    rpc InvokeActor(InvokeActorRequest) returns (InvokeActorResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `InvokeActorRequest` | `actor_type`, `actor_id`, `method`, `data` (bytes), optional `metadata` |
+    | Response | `InvokeActorResponse` | `data` (bytes) |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/InvokeActor`
+  </Accordion>
+
+  <Accordion title="RegisterActorTimer — register a timer for an actor">
+    Registers a timer that fires on a schedule while the actor is active. Timers are reset when the actor is deactivated.
+
+    ```protobuf
+    rpc RegisterActorTimer(RegisterActorTimerRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `RegisterActorTimerRequest` | `actor_type`, `actor_id`, `name`, `due_time`, `period`, `callback`, `data` (bytes), `ttl` |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/RegisterActorTimer`
+  </Accordion>
+
+  <Accordion title="UnregisterActorTimer — cancel a timer">
+    Cancels a previously registered actor timer.
+
+    ```protobuf
+    rpc UnregisterActorTimer(UnregisterActorTimerRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `UnregisterActorTimerRequest` | `actor_type`, `actor_id`, `name` |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/UnregisterActorTimer`
+  </Accordion>
+
+  <Accordion title="RegisterActorReminder — register a durable reminder">
+    Registers a durable reminder that persists across actor deactivation and process restarts.
+
+    ```protobuf
+    rpc RegisterActorReminder(RegisterActorReminderRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `RegisterActorReminderRequest` | `actor_type`, `actor_id`, `name`, `due_time`, `period`, `data` (bytes), `ttl` |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/RegisterActorReminder`
+  </Accordion>
+
+  <Accordion title="UnregisterActorReminder — cancel a reminder">
+    Cancels a previously registered actor reminder.
+
+    ```protobuf
+    rpc UnregisterActorReminder(UnregisterActorReminderRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `UnregisterActorReminderRequest` | `actor_type`, `actor_id`, `name` |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/UnregisterActorReminder`
+  </Accordion>
+</AccordionGroup>
+
+### Workflows
+
+<Info>
+  Workflow Beta1 methods are the current stable recommendation. Alpha1 equivalents (`StartWorkflowAlpha1`, etc.) are deprecated and retained for backward compatibility only.
+</Info>
+
+<AccordionGroup>
+  <Accordion title="StartWorkflowBeta1 — start a workflow instance">
+    Creates and starts a new workflow instance.
+
+    ```protobuf
+    rpc StartWorkflowBeta1(StartWorkflowRequest) returns (StartWorkflowResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `StartWorkflowRequest` | `instance_id`, `workflow_component`, `workflow_name`, optional `options`, optional `input` (bytes), optional `send_event_on_start` |
+    | Response | `StartWorkflowResponse` | `instance_id` |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/StartWorkflowBeta1`
+  </Accordion>
+
+  <Accordion title="GetWorkflowBeta1 — get workflow instance status">
+    Returns the current status, inputs, outputs, and metadata of a workflow instance.
+
+    ```protobuf
+    rpc GetWorkflowBeta1(GetWorkflowRequest) returns (GetWorkflowResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `GetWorkflowRequest` | `instance_id`, `workflow_component` |
+    | Response | `GetWorkflowResponse` | `instance_id`, `workflow_name`, `created_at`, `last_updated_at`, `runtime_status`, `properties` |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/GetWorkflowBeta1`
+  </Accordion>
+
+  <Accordion title="PauseWorkflowBeta1 — suspend a running workflow">
+    Suspends a running workflow instance. The instance can be resumed later.
+
+    ```protobuf
+    rpc PauseWorkflowBeta1(PauseWorkflowRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `PauseWorkflowRequest` | `instance_id`, `workflow_component` |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/PauseWorkflowBeta1`
+  </Accordion>
+
+  <Accordion title="ResumeWorkflowBeta1 — resume a suspended workflow">
+    Resumes a previously paused workflow instance.
+
+    ```protobuf
+    rpc ResumeWorkflowBeta1(ResumeWorkflowRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `ResumeWorkflowRequest` | `instance_id`, `workflow_component` |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/ResumeWorkflowBeta1`
+  </Accordion>
+
+  <Accordion title="TerminateWorkflowBeta1 — stop a workflow instance">
+    Terminates a running or suspended workflow instance.
+
+    ```protobuf
+    rpc TerminateWorkflowBeta1(TerminateWorkflowRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `TerminateWorkflowRequest` | `instance_id`, `workflow_component` |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/TerminateWorkflowBeta1`
+  </Accordion>
+
+  <Accordion title="RaiseEventWorkflowBeta1 — send an event to a workflow">
+    Delivers an external event to a waiting workflow instance.
+
+    ```protobuf
+    rpc RaiseEventWorkflowBeta1(RaiseEventWorkflowRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `RaiseEventWorkflowRequest` | `instance_id`, `workflow_component`, `event_name`, `event_data` (bytes) |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/RaiseEventWorkflowBeta1`
+  </Accordion>
+
+  <Accordion title="PurgeWorkflowBeta1 — delete workflow history">
+    Removes the state and history of a completed, terminated, or failed workflow instance.
+
+    ```protobuf
+    rpc PurgeWorkflowBeta1(PurgeWorkflowRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `PurgeWorkflowRequest` | `instance_id`, `workflow_component` |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/PurgeWorkflowBeta1`
+  </Accordion>
+</AccordionGroup>
+
+### Distributed lock
+
+<AccordionGroup>
+  <Accordion title="TryLockAlpha1 — acquire a distributed lock (alpha)">
+    Attempts to acquire a distributed lock with a TTL. Returns immediately with a success or failure indicator.
+
+    ```protobuf
+    rpc TryLockAlpha1(TryLockRequest) returns (TryLockResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `TryLockRequest` | `store_name`, `resource_id`, `lock_owner`, `expiry_in_seconds` |
+    | Response | `TryLockResponse` | `success` (bool) |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/TryLockAlpha1`
+  </Accordion>
+
+  <Accordion title="UnlockAlpha1 — release a distributed lock (alpha)">
+    Releases a lock previously acquired with `TryLockAlpha1`.
+
+    ```protobuf
+    rpc UnlockAlpha1(UnlockRequest) returns (UnlockResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `UnlockRequest` | `store_name`, `resource_id`, `lock_owner` |
+    | Response | `UnlockResponse` | `status` (enum: `SUCCESS`, `LOCK_DOES_NOT_EXIST`, `LOCK_BELONGS_TO_OTHERS`, `INTERNAL_ERROR`) |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/UnlockAlpha1`
+  </Accordion>
+</AccordionGroup>
+
+### Cryptography
+
+<AccordionGroup>
+  <Accordion title="EncryptAlpha1 — encrypt a data stream (alpha)">
+    Opens a bidirectional stream. The client sends chunks of plaintext data along with encryption options on the first message; subsequent messages carry additional payload chunks. Dapr returns ciphertext chunks on the response stream.
+
+    ```protobuf
+    rpc EncryptAlpha1(stream EncryptRequest) returns (stream EncryptResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Client → Dapr (stream) | `EncryptRequest` | First message: options (`component_name`, `key_name`, `key_wrap_algorithm`, etc.) + payload chunk. Subsequent messages: payload chunks only. |
+    | Dapr → Client (stream) | `EncryptResponse` | Ciphertext payload chunks with sequence numbers |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/EncryptAlpha1`
+  </Accordion>
+
+  <Accordion title="DecryptAlpha1 — decrypt a data stream (alpha)">
+    Opens a bidirectional stream. The client sends ciphertext chunks; Dapr decrypts them and returns plaintext chunks.
+
+    ```protobuf
+    rpc DecryptAlpha1(stream DecryptRequest) returns (stream DecryptResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Client → Dapr (stream) | `DecryptRequest` | First message: options (`component_name`, `key_name`) + ciphertext chunk. Subsequent messages: ciphertext chunks only. |
+    | Dapr → Client (stream) | `DecryptResponse` | Plaintext payload chunks with sequence numbers |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/DecryptAlpha1`
+  </Accordion>
+</AccordionGroup>
+
+### Job scheduling
+
+<AccordionGroup>
+  <Accordion title="ScheduleJobAlpha1 — create or update a scheduled job (alpha)">
+    Creates or replaces a job that triggers on a cron schedule or a one-shot due time.
+
+    ```protobuf
+    rpc ScheduleJobAlpha1(ScheduleJobRequest) returns (ScheduleJobResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `ScheduleJobRequest` | `job` (`Job` message: `name`, `schedule`, `due_time`, `repeats`, `ttl`, `data`) |
+    | Response | `ScheduleJobResponse` | — (empty on success) |
+
+    The `Job.schedule` field accepts systemd timer-style cron expressions (6 fields: seconds, minutes, hours, day-of-month, month, day-of-week) and `@`-prefixed period strings such as `@daily` or `@every 1h30m`.
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/ScheduleJobAlpha1`
+  </Accordion>
+
+  <Accordion title="GetJobAlpha1 — retrieve a scheduled job (alpha)">
+    Returns the definition of a previously scheduled job.
+
+    ```protobuf
+    rpc GetJobAlpha1(GetJobRequest) returns (GetJobResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `GetJobRequest` | `name` |
+    | Response | `GetJobResponse` | `job` (`Job` message) |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/GetJobAlpha1`
+  </Accordion>
+
+  <Accordion title="DeleteJobAlpha1 — delete a scheduled job (alpha)">
+    Cancels and removes a scheduled job by name.
+
+    ```protobuf
+    rpc DeleteJobAlpha1(DeleteJobRequest) returns (DeleteJobResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `DeleteJobRequest` | `name` |
+    | Response | `DeleteJobResponse` | — (empty on success) |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/DeleteJobAlpha1`
+  </Accordion>
+</AccordionGroup>
+
+### Sidecar metadata
+
+<AccordionGroup>
+  <Accordion title="GetMetadata — inspect sidecar state">
+    Returns metadata about the running sidecar: app ID, registered components, active actors, subscriptions, and extended attributes.
+
+    ```protobuf
+    rpc GetMetadata(GetMetadataRequest) returns (GetMetadataResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `GetMetadataRequest` | (empty) |
+    | Response | `GetMetadataResponse` | `id`, `active_actors_count`, `registered_components`, `extended_metadata`, `subscriptions`, `http_endpoints`, `app_connection_properties`, `runtime_metadata` |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/GetMetadata`
+  </Accordion>
+
+  <Accordion title="SetMetadata — store a custom attribute in sidecar metadata">
+    Writes an arbitrary key-value pair into the sidecar's extended metadata map. Useful for tagging a sidecar with runtime information visible to operators.
+
+    ```protobuf
+    rpc SetMetadata(SetMetadataRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `SetMetadataRequest` | `key`, `value` |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/SetMetadata`
+  </Accordion>
+</AccordionGroup>
+
+### Lifecycle
+
+<AccordionGroup>
+  <Accordion title="Shutdown — stop the sidecar">
+    Gracefully shuts down the Dapr sidecar process. Applications can call this to trigger a clean sidecar shutdown without sending a `SIGTERM`.
+
+    ```protobuf
+    rpc Shutdown(ShutdownRequest) returns (google.protobuf.Empty);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `ShutdownRequest` | (empty) |
+    | Response | `google.protobuf.Empty` | — |
+
+    Full method name: `/dapr.proto.runtime.v1.Dapr/Shutdown`
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## `AppCallback` service
+
+**Full name:** `dapr.proto.runtime.v1.AppCallback`
+
+Dapr calls your application through this interface. Your application must implement a gRPC server that satisfies this service definition and register it before starting the Dapr sidecar.
+
+Proto source: [dapr/proto/runtime/v1/appcallback.proto](https://github.com/dapr/dapr/tree/master/dapr/proto/runtime/v1/appcallback.proto)
+
+<AccordionGroup>
+  <Accordion title="OnInvoke — handle an inbound service invocation">
+    Dapr calls this method when another service invokes your application. Your implementation receives the request and returns the response.
+
+    ```protobuf
+    rpc OnInvoke(common.v1.InvokeRequest) returns (common.v1.InvokeResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `common.v1.InvokeRequest` | `method`, `data` (Any), `content_type`, `http_extension` |
+    | Response | `common.v1.InvokeResponse` | `data` (Any), `content_type` |
+
+    Full method name: `/dapr.proto.runtime.v1.AppCallback/OnInvoke`
+  </Accordion>
+
+  <Accordion title="ListTopicSubscriptions — declare pub/sub subscriptions">
+    Dapr calls this method at startup to discover which pub/sub topics your application subscribes to. Return an empty response if your application has no subscriptions.
+
+    ```protobuf
+    rpc ListTopicSubscriptions(google.protobuf.Empty) returns (ListTopicSubscriptionsResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `google.protobuf.Empty` | — |
+    | Response | `ListTopicSubscriptionsResponse` | Repeated `TopicSubscription` (pubsub name, topic, routes, metadata, dead letter topic, bulk subscribe config) |
+
+    Full method name: `/dapr.proto.runtime.v1.AppCallback/ListTopicSubscriptions`
+  </Accordion>
+
+  <Accordion title="OnTopicEvent — receive a pub/sub event">
+    Dapr calls this method to deliver a pub/sub event to your application. Return a `TopicEventResponse` with `status` set to indicate how Dapr should handle the message:
+
+    | Status | Effect |
+    |--------|--------|
+    | `SUCCESS` | Message acknowledged and removed from the topic |
+    | `RETRY` | Dapr redelivers the message |
+    | `DROP` | Message discarded without redelivery |
+
+    ```protobuf
+    rpc OnTopicEvent(TopicEventRequest) returns (TopicEventResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `TopicEventRequest` | `id`, `source`, `type`, `spec_version`, `data_content_type`, `data` (bytes), `topic`, `pubsub_name`, `path`, `extensions` |
+    | Response | `TopicEventResponse` | `status` (enum) |
+
+    Full method name: `/dapr.proto.runtime.v1.AppCallback/OnTopicEvent`
+  </Accordion>
+
+  <Accordion title="ListInputBindings — declare input binding subscriptions">
+    Dapr calls this method at startup to discover which input bindings your application wants to receive events from.
+
+    ```protobuf
+    rpc ListInputBindings(google.protobuf.Empty) returns (ListInputBindingsResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `google.protobuf.Empty` | — |
+    | Response | `ListInputBindingsResponse` | Repeated `bindings` (string list of binding names) |
+
+    Full method name: `/dapr.proto.runtime.v1.AppCallback/ListInputBindings`
+  </Accordion>
+
+  <Accordion title="OnBindingEvent — receive an input binding event">
+    Dapr calls this method to deliver an input binding trigger to your application. The response can optionally trigger output bindings and persist state.
+
+    ```protobuf
+    rpc OnBindingEvent(BindingEventRequest) returns (BindingEventResponse);
+    ```
+
+    | | Type | Description |
+    |-|------|-------------|
+    | Request | `BindingEventRequest` | `name` (binding name), `data` (bytes), `metadata` |
+    | Response | `BindingEventResponse` | `store_name`, repeated `states` (`StateItem`), repeated `to` (output binding names) |
+
+    Full method name: `/dapr.proto.runtime.v1.AppCallback/OnBindingEvent`
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Quick examples
+
+<Tabs>
+  <Tab title="Go">
+    ```go
+    import (
+        pb "github.com/dapr/dapr/pkg/proto/runtime/v1"
+        "google.golang.org/grpc"
+    )
+
+    conn, _ := grpc.Dial("localhost:50001", grpc.WithInsecure())
+    client := pb.NewDaprClient(conn)
+
+    // Publish an event
+    _, err := client.PublishEvent(ctx, &pb.PublishEventRequest{
+        PubsubName: "pubsub",
+        Topic:      "orders",
+        Data:       []byte(`{"orderId":"123"}`),
+        DataContentType: "application/json",
+    })
+
+    // Save state
+    _, err = client.SaveState(ctx, &pb.SaveStateRequest{
+        StoreName: "statestore",
+        States: []*common.StateItem{
+            {Key: "key1", Value: []byte("value1")},
+        },
+    })
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    import grpc
+    from dapr.proto.runtime.v1 import dapr_pb2, dapr_pb2_grpc
+
+    channel = grpc.insecure_channel("localhost:50001")
+    stub = dapr_pb2_grpc.DaprStub(channel)
+
+    # Publish an event
+    stub.PublishEvent(dapr_pb2.PublishEventRequest(
+        pubsub_name="pubsub",
+        topic="orders",
+        data=b'{"orderId":"123"}',
+        data_content_type="application/json",
+    ))
+
+    # Get state
+    resp = stub.GetState(dapr_pb2.GetStateRequest(
+        store_name="statestore",
+        key="key1",
+    ))
+    print(resp.data)
+    ```
+  </Tab>
+  <Tab title="Node.js">
+    ```javascript
+    const grpc = require("@grpc/grpc-js");
+    const { DaprClient } = require("./generated/dapr_grpc_pb");
+    const { PublishEventRequest, GetStateRequest } = require("./generated/dapr_pb");
+
+    const client = new DaprClient(
+      "localhost:50001",
+      grpc.credentials.createInsecure()
+    );
+
+    // Publish an event
+    const req = new PublishEventRequest();
+    req.setPubsubName("pubsub");
+    req.setTopic("orders");
+    req.setData(Buffer.from(JSON.stringify({ orderId: "123" })));
+    req.setDataContentType("application/json");
+    client.publishEvent(req, (err, _) => { /* ... */ });
+
+    // Get state
+    const stateReq = new GetStateRequest();
+    stateReq.setStoreName("statestore");
+    stateReq.setKey("key1");
+    client.getState(stateReq, (err, resp) => {
+      console.log(resp.getData());
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## Related pages
+
+<CardGroup cols={2}>
+  <Card title="gRPC API overview" icon="network-wired" href="/api/grpc/overview">
+    Connection details, authentication, error handling, and client stub generation.
+  </Card>
+  <Card title="HTTP API overview" icon="globe" href="/api/http/overview">
+    The equivalent REST API reference.
+  </Card>
+</CardGroup>

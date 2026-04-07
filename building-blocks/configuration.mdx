@@ -1,0 +1,248 @@
+---
+title: "Configuration"
+description: "Read and subscribe to application configuration values from external stores with automatic change notifications."
+keywords: ["configuration", "feature flags", "app config", "Redis", "Azure App Configuration", "subscribe"]
+---
+
+The configuration building block provides a read-only view of configuration items stored in external systems such as Redis or Azure App Configuration. Unlike state management, configuration data is treated as a controlled, operator-managed resource that your application reads but does not write.
+
+<CardGroup cols={2}>
+  <Card title="Read configuration" icon="book-open">
+    Retrieve single keys or all configuration items from an external store.
+  </Card>
+  <Card title="Subscribe to changes" icon="bell">
+    Receive real-time notifications when configuration values change — no polling required.
+  </Card>
+  <Card title="Multiple backends" icon="server">
+    Redis, Azure App Configuration, and more. Switch providers with a component YAML change.
+  </Card>
+  <Card title="Read-only by design" icon="lock">
+    Applications read configuration; operators manage it. This separation prevents accidental writes.
+  </Card>
+</CardGroup>
+
+## How it differs from state management
+
+| | Configuration | State management |
+|---|---|---|
+| Application can write | No | Yes |
+| Intended for | Feature flags, settings, parameters | Application data |
+| Change notification | Yes (SSE subscription) | No |
+| Typical owner | Operator / platform team | Application |
+
+## HTTP API
+
+### Get all configuration
+
+```bash
+GET /v1.0/configuration/{storeName}
+```
+
+```bash
+curl "http://localhost:3500/v1.0/configuration/my-config-store"
+```
+
+Response:
+
+```json
+{
+  "featureFlagBeta": {
+    "value": "true",
+    "version": "1",
+    "metadata": {}
+  },
+  "maxRetries": {
+    "value": "5",
+    "version": "2",
+    "metadata": {}
+  }
+}
+```
+
+### Get specific keys
+
+```bash
+GET /v1.0/configuration/{storeName}?key={key1}&key={key2}
+```
+
+```bash
+curl "http://localhost:3500/v1.0/configuration/my-config-store?key=featureFlagBeta&key=maxRetries"
+```
+
+<ParamField path="storeName" type="string" required>
+  The name of the configuration store component.
+</ParamField>
+
+<ParamField query="key" type="string">
+  A configuration key to retrieve. Repeat the parameter to request multiple keys. Omit to get all items.
+</ParamField>
+
+### Subscribe to configuration changes
+
+Open a Server-Sent Events (SSE) connection to receive change notifications as they happen:
+
+```bash
+GET /v1.0/configuration/{storeName}/subscribe?key={key1}&key={key2}
+```
+
+```bash
+curl -N "http://localhost:3500/v1.0/configuration/my-config-store/subscribe?key=featureFlagBeta"
+```
+
+The response is an SSE stream. Dapr sends the initial values immediately, then pushes updates whenever values change:
+
+```
+data: {"id":"sub-abc123","items":{"featureFlagBeta":{"value":"true","version":"1","metadata":{}}}}
+
+data: {"id":"sub-abc123","items":{"featureFlagBeta":{"value":"false","version":"2","metadata":{}}}}
+```
+
+The first event includes the subscription ID (`id`). Store this ID to unsubscribe later.
+
+<ParamField query="key" type="string">
+  A configuration key to watch. Repeat to watch multiple keys. Omit to watch all keys.
+</ParamField>
+
+### Unsubscribe
+
+```bash
+GET /v1.0/configuration/{storeName}/{configurationSubscribeID}/unsubscribe
+```
+
+```bash
+curl "http://localhost:3500/v1.0/configuration/my-config-store/sub-abc123/unsubscribe"
+```
+
+<ParamField path="configurationSubscribeID" type="string" required>
+  The subscription ID returned in the first SSE event.
+</ParamField>
+
+## Component configuration
+
+### Redis
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: my-config-store
+  namespace: default
+spec:
+  type: configuration.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: "redis.example.com:6379"
+    - name: redisPassword
+      secretKeyRef:
+        name: redis-password
+        key: password
+    - name: enableTLS
+      value: "true"
+```
+
+### Azure App Configuration
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: azure-app-config
+  namespace: default
+spec:
+  type: configuration.azure.appconfig
+  version: v1
+  metadata:
+    - name: host
+      value: "https://my-appconfig.azconfig.io"
+    - name: azureTenantId
+      value: "YOUR_TENANT_ID"
+    - name: azureClientId
+      value: "YOUR_CLIENT_ID"
+    - name: azureClientSecret
+      secretKeyRef:
+        name: azure-sp-secret
+        key: secret
+```
+
+## Example: feature flags from Redis
+
+This example stores feature flags in Redis and subscribes to live updates so the application picks up new flag values without restarting.
+
+<Steps>
+  <Step title="Write flags into Redis">
+    ```bash
+    redis-cli SET featureFlagCheckout "true"
+    redis-cli SET featureFlagNewUI "false"
+    ```
+  </Step>
+
+  <Step title="Configure the Dapr configuration store">
+    ```yaml
+    apiVersion: dapr.io/v1alpha1
+    kind: Component
+    metadata:
+      name: feature-flags
+    spec:
+      type: configuration.redis
+      version: v1
+      metadata:
+        - name: redisHost
+          value: "localhost:6379"
+    ```
+  </Step>
+
+  <Step title="Read flags on startup">
+    ```python
+    import requests
+
+    DAPR_URL = "http://localhost:3500"
+
+    def load_feature_flags():
+        response = requests.get(
+            f"{DAPR_URL}/v1.0/configuration/feature-flags",
+            params={"key": ["featureFlagCheckout", "featureFlagNewUI"]}
+        )
+        response.raise_for_status()
+        items = response.json()
+        return {k: v["value"] == "true" for k, v in items.items()}
+
+    flags = load_feature_flags()
+    print(flags)  # {'featureFlagCheckout': True, 'featureFlagNewUI': False}
+    ```
+  </Step>
+
+  <Step title="Subscribe to live updates">
+    ```python
+    import requests
+    import json
+
+    def watch_flags():
+        url = f"{DAPR_URL}/v1.0/configuration/feature-flags/subscribe"
+        params = {"key": ["featureFlagCheckout", "featureFlagNewUI"]}
+
+        with requests.get(url, params=params, stream=True) as resp:
+            sub_id = None
+            for line in resp.iter_lines():
+                if line.startswith(b"data: "):
+                    event = json.loads(line[6:])
+                    if sub_id is None:
+                        sub_id = event["id"]
+                        print(f"Subscribed with ID: {sub_id}")
+                    # Update in-memory flag cache
+                    for key, item in event.get("items", {}).items():
+                        flags[key] = item["value"] == "true"
+                        print(f"Flag updated: {key} = {flags[key]}")
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  The configuration API is currently at `v1.0`. Check the [Dapr roadmap](https://github.com/dapr/dapr/issues) for planned write-back support in future releases.
+</Note>
+
+## Related
+
+- [Secrets management](/building-blocks/secrets)
+- [State management](/building-blocks/state-management)
+- [Configuration API reference](/api/http/configuration)

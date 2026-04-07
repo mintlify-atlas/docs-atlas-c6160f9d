@@ -1,0 +1,454 @@
+---
+title: "Runtime configuration"
+description: "Configure Dapr sidecar behavior using the Configuration CRD, including mTLS, tracing, metrics, middleware pipelines, access control, and feature flags."
+---
+
+The `Configuration` custom resource (CRD) controls Dapr sidecar behavior at runtime. A single `Configuration` object can be shared across multiple applications or scoped to one. Every field in `spec` is optional — Dapr applies sensible defaults when fields are omitted.
+
+## Applying a configuration
+
+<Tabs>
+  <Tab title="Kubernetes">
+    Add the `dapr.io/config` annotation to your pod spec, referencing a `Configuration` object in the same namespace:
+
+    ```yaml
+    annotations:
+      dapr.io/enabled: "true"
+      dapr.io/app-id: "my-app"
+      dapr.io/config: "my-config"
+    ```
+
+    Apply the `Configuration` CRD with `kubectl`:
+
+    ```bash
+    kubectl apply -f my-config.yaml
+    ```
+  </Tab>
+  <Tab title="Self-hosted">
+    Pass the path to a configuration file via the `--config` flag when running `daprd`:
+
+    ```bash
+    daprd --app-id my-app --config ./config.yaml
+    ```
+
+    Or set it when using the Dapr CLI:
+
+    ```bash
+    dapr run --app-id my-app --config ./config.yaml -- ./myapp
+    ```
+  </Tab>
+</Tabs>
+
+## Full example
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: my-config
+  namespace: default
+spec:
+  mtls:
+    enabled: true
+    workloadCertTTL: "24h"
+    allowedClockSkew: "15m"
+  tracing:
+    samplingRate: "1"
+    otel:
+      endpointAddress: "otel-collector:4317"
+      protocol: "grpc"
+      isSecure: false
+  metric:
+    enabled: true
+    http:
+      increasedCardinality: false
+      excludeVerbs: false
+  httpPipeline:
+    handlers:
+      - name: oauth2
+        type: middleware.http.oauth2
+        version: v1
+  appHttpPipeline:
+    handlers:
+      - name: uppercase
+        type: middleware.http.uppercase
+        version: v1
+  secrets:
+    scopes:
+      - storeName: vault
+        defaultAccess: deny
+        allowedSecrets:
+          - db-password
+          - api-key
+  accessControl:
+    defaultAction: deny
+    trustDomain: mycompany.local
+    policies:
+      - appId: frontend
+        defaultAction: allow
+        operations:
+          - name: /api/v1/**
+            httpVerb: ["GET", "POST"]
+            action: allow
+  nameResolution:
+    component: mdns
+    version: v1
+  features:
+    - name: HotReload
+      enabled: true
+    - name: ActorStateTTL
+      enabled: true
+  logging:
+    apiLogging:
+      enabled: true
+      obfuscateURLs: false
+      omitHealthChecks: true
+```
+
+## Spec fields
+
+### `spec.mtls`
+
+Controls mutual TLS between Dapr sidecars and the Dapr control plane. Mutual TLS is enabled by default in Kubernetes mode.
+
+<ParamField body="spec.mtls.enabled" type="boolean" default="true">
+  Enables mTLS for all sidecar-to-sidecar and sidecar-to-control-plane communication.
+</ParamField>
+
+<ParamField body="spec.mtls.workloadCertTTL" type="string" default="24h">
+  Time-to-live for workload certificates issued by Sentry. Accepts a Go duration string (e.g., `"24h"`, `"48h"`).
+</ParamField>
+
+<ParamField body="spec.mtls.allowedClockSkew" type="string" default="15m">
+  Maximum tolerated clock skew between nodes when validating certificate expiry. Accepts a Go duration string (e.g., `"15m"`).
+</ParamField>
+
+<ParamField body="spec.mtls.sentryAddress" type="string">
+  Override address for the Sentry certificate authority. Useful when Sentry runs outside the default control plane namespace.
+</ParamField>
+
+<ParamField body="spec.mtls.controlPlaneTrustDomain" type="string">
+  Trust domain for the Dapr control plane. Defaults to the cluster trust domain.
+</ParamField>
+
+<ParamField body="spec.mtls.tokenValidators" type="object[]">
+  Additional token validators beyond the built-in Kubernetes or insecure validators. Each entry takes a `name` (string) and optional `options` (object).
+</ParamField>
+
+---
+
+### `spec.tracing`
+
+Configures distributed trace export. Dapr supports Zipkin and OpenTelemetry (OTLP) exporters. Set `samplingRate` to `"1"` to capture all traces, or `"0"` to disable.
+
+<ParamField body="spec.tracing.samplingRate" type="string">
+  Fraction of traces to sample, expressed as a string between `"0"` (none) and `"1"` (all). For example, `"0.5"` samples 50% of requests.
+</ParamField>
+
+<ParamField body="spec.tracing.stdout" type="boolean" default="false">
+  When `true`, traces are written to stdout instead of (or in addition to) the configured exporter.
+</ParamField>
+
+<ParamField body="spec.tracing.zipkin.endpointAddress" type="string">
+  HTTP endpoint for the Zipkin collector (e.g., `"http://zipkin:9411/api/v2/spans"`).
+</ParamField>
+
+<ParamField body="spec.tracing.otel.endpointAddress" type="string">
+  Host and port of the OpenTelemetry collector (e.g., `"otel-collector:4317"`). Do not include the `http://` or `https://` scheme — use `isSecure` instead.
+</ParamField>
+
+<ParamField body="spec.tracing.otel.protocol" type="string" default="grpc">
+  Transport protocol for OTLP. Accepted values: `"grpc"` or `"http"`.
+</ParamField>
+
+<ParamField body="spec.tracing.otel.isSecure" type="boolean" default="true">
+  Whether to use TLS when connecting to the OTLP endpoint. Defaults to `true`.
+</ParamField>
+
+<ParamField body="spec.tracing.otel.headers" type="string[]">
+  HTTP headers to attach to every OTLP export request. Formatted as `"key=value"` strings (e.g., `["x-api-key=secret"]`).
+</ParamField>
+
+<ParamField body="spec.tracing.otel.timeout" type="string">
+  Timeout for OTLP export requests. Accepts a Go duration string (e.g., `"10s"`).
+</ParamField>
+
+<Note>
+  You can also configure the OTLP endpoint via standard OpenTelemetry environment variables (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`). Environment variables are applied only when `spec.tracing.otel.endpointAddress` is not already set.
+</Note>
+
+---
+
+### `spec.metric` / `spec.metrics`
+
+Controls the Dapr metrics server. Both `metric` and `metrics` keys are accepted — if both are present, `metrics` values take precedence for fields they define.
+
+<ParamField body="spec.metric.enabled" type="boolean" default="true">
+  Enables the Prometheus metrics endpoint on the sidecar (`/metrics`).
+</ParamField>
+
+<ParamField body="spec.metric.recordErrorCodes" type="boolean" default="false">
+  When enabled, HTTP error codes are recorded as metric labels for finer-grained error tracking.
+</ParamField>
+
+<ParamField body="spec.metric.latencyDistributionBuckets" type="number[]">
+  Custom histogram bucket boundaries (in milliseconds) for latency metrics. When omitted, Dapr uses a default set of 34 buckets ranging from 1 ms to 100,000 ms.
+</ParamField>
+
+<ParamField body="spec.metric.http.increasedCardinality" type="boolean" default="true">
+  Controls per-path cardinality for HTTP metrics. Set to `false` to reduce label cardinality and metric volume. This default will change to `false` in a future Dapr release.
+</ParamField>
+
+<ParamField body="spec.metric.http.pathMatching" type="string[]">
+  List of path patterns to group into a single metric label. Useful for reducing high-cardinality path parameters (e.g., `/orders/{id}` → `/orders/{}`).
+</ParamField>
+
+<ParamField body="spec.metric.http.excludeVerbs" type="boolean" default="false">
+  When `true`, the HTTP verb (GET, POST, etc.) is omitted from metric labels.
+</ParamField>
+
+<ParamField body="spec.metric.rules" type="object[]">
+  Fine-grained rules for individual metric names. Each rule has a `name` (string) and a `labels` array. Labels support `regex` maps to canonicalize label values.
+</ParamField>
+
+---
+
+### `spec.httpPipeline`
+
+Middleware pipeline applied to **inbound** HTTP requests reaching the Dapr sidecar from external callers. Handlers are executed in list order.
+
+<ParamField body="spec.httpPipeline.handlers" type="object[]">
+  Ordered list of middleware components to apply. Each handler entry requires:
+
+  - `name` — the component name as declared in your `Component` manifest
+  - `type` — the component type string (e.g., `middleware.http.oauth2`)
+  - `version` — the component version (e.g., `v1`)
+</ParamField>
+
+```yaml
+httpPipeline:
+  handlers:
+    - name: oauth2
+      type: middleware.http.oauth2
+      version: v1
+    - name: ratelimit
+      type: middleware.http.ratelimit
+      version: v1
+```
+
+---
+
+### `spec.appHttpPipeline`
+
+Middleware pipeline applied to **outbound** HTTP requests made by the Dapr sidecar to your application. Handlers run before the request reaches your app.
+
+<ParamField body="spec.appHttpPipeline.handlers" type="object[]">
+  Ordered list of middleware components. Same structure as `spec.httpPipeline.handlers`.
+</ParamField>
+
+---
+
+### `spec.secrets`
+
+Restricts which secrets an application can read from configured secret stores. Without a scope, all secrets in a store are accessible.
+
+<ParamField body="spec.secrets.scopes" type="object[]">
+  List of scope rules, one per secret store.
+</ParamField>
+
+<ParamField body="spec.secrets.scopes[].storeName" type="string" required>
+  Name of the secret store component this scope applies to.
+</ParamField>
+
+<ParamField body="spec.secrets.scopes[].defaultAccess" type="string" default="allow">
+  Default access policy when a secret name does not match `allowedSecrets` or `deniedSecrets`. Accepted values: `"allow"`, `"deny"`.
+</ParamField>
+
+<ParamField body="spec.secrets.scopes[].allowedSecrets" type="string[]">
+  Explicit allowlist of secret names. When this list is non-empty, only secrets in the list are accessible regardless of `defaultAccess`.
+</ParamField>
+
+<ParamField body="spec.secrets.scopes[].deniedSecrets" type="string[]">
+  Explicit denylist of secret names. When `defaultAccess` is `"allow"`, individual secrets can be blocked by listing them here.
+</ParamField>
+
+<Warning>
+  Each `storeName` must be unique within the `scopes` list. Duplicate entries cause the configuration to be rejected at load time.
+</Warning>
+
+---
+
+### `spec.accessControl`
+
+Service invocation access control policies. By default, all service-to-service calls are allowed. Use this section to enforce deny-by-default posture and grant explicit permissions.
+
+<ParamField body="spec.accessControl.defaultAction" type="string" default="allow">
+  Global default action when no matching policy is found. Accepted values: `"allow"`, `"deny"`.
+</ParamField>
+
+<ParamField body="spec.accessControl.trustDomain" type="string" default="public">
+  Trust domain for SPIFFE-based identity. Should match the trust domain configured in Sentry.
+</ParamField>
+
+<ParamField body="spec.accessControl.policies" type="object[]">
+  Per-application access policies.
+</ParamField>
+
+<ParamField body="spec.accessControl.policies[].appId" type="string" required>
+  The Dapr app ID of the calling application this policy applies to.
+</ParamField>
+
+<ParamField body="spec.accessControl.policies[].defaultAction" type="string">
+  Default action for this app when no matching operation rule is found. Overrides the global `defaultAction`.
+</ParamField>
+
+<ParamField body="spec.accessControl.policies[].namespace" type="string">
+  Kubernetes namespace of the calling app. Required when `trustDomain` is non-default.
+</ParamField>
+
+<ParamField body="spec.accessControl.policies[].operations" type="object[]">
+  List of operation-level rules for this app.
+</ParamField>
+
+<ParamField body="spec.accessControl.policies[].operations[].name" type="string" required>
+  Operation path to match. Supports wildcards: `/api/v1/**`.
+</ParamField>
+
+<ParamField body="spec.accessControl.policies[].operations[].httpVerb" type="string[]">
+  HTTP verbs this rule applies to (e.g., `["GET", "POST"]`). Omit to match all verbs.
+</ParamField>
+
+<ParamField body="spec.accessControl.policies[].operations[].action" type="string" required>
+  Action to take: `"allow"` or `"deny"`.
+</ParamField>
+
+---
+
+### `spec.nameResolution`
+
+Selects and configures the name resolution component used for service-to-service discovery. In Kubernetes mode, the Kubernetes DNS resolver is used by default. In self-hosted mode, mDNS is the default.
+
+<ParamField body="spec.nameResolution.component" type="string">
+  Name resolution component to use (e.g., `"mdns"`, `"kubernetes"`, `"consul"`).
+</ParamField>
+
+<ParamField body="spec.nameResolution.version" type="string">
+  Component version (e.g., `"v1"`).
+</ParamField>
+
+<ParamField body="spec.nameResolution.configuration" type="object">
+  Component-specific configuration passed as an arbitrary object. Schema depends on the selected component.
+</ParamField>
+
+---
+
+### `spec.features`
+
+Enable or disable named feature flags. These flags control preview and opt-in behaviors in the Dapr runtime.
+
+<ParamField body="spec.features" type="object[]">
+  List of feature flag entries.
+</ParamField>
+
+<ParamField body="spec.features[].name" type="string" required>
+  Feature flag name. Supported values:
+
+  | Name | Description |
+  |------|-------------|
+  | `ActorStateTTL` | Allow setting TTL on actor state keys. |
+  | `HotReload` | Reload component definitions without restarting the sidecar. |
+  | `WorkflowsClusteredDeployment` | Support workflows in clustered deployments. |
+  | `WorkflowsRemoteActivityReminder` | Queue activity results for cross-app workflows when the target app is temporarily unavailable. |
+</ParamField>
+
+<ParamField body="spec.features[].enabled" type="boolean" required>
+  Whether the feature is enabled. Set to `false` to explicitly disable a feature that is on by default.
+</ParamField>
+
+---
+
+### `spec.logging`
+
+Configures API request logging on the sidecar.
+
+<ParamField body="spec.logging.apiLogging.enabled" type="boolean" default="false">
+  Enables API request logging. Individual sidecars can override this via the `--enable-api-logging` flag.
+</ParamField>
+
+<ParamField body="spec.logging.apiLogging.obfuscateURLs" type="boolean" default="false">
+  When `true`, logs route names rather than full request paths, preventing potentially sensitive path parameters from appearing in logs.
+</ParamField>
+
+<ParamField body="spec.logging.apiLogging.omitHealthChecks" type="boolean" default="false">
+  When `true`, health probe requests are excluded from API logs to reduce noise.
+</ParamField>
+
+---
+
+### `spec.components`
+
+Controls which component types the sidecar will load.
+
+<ParamField body="spec.components.deny" type="string[]">
+  List of component type strings that this sidecar must not instantiate (e.g., `["bindings.http"]`). Any component whose type matches an entry in this list is silently skipped at startup.
+</ParamField>
+
+---
+
+### `spec.workflow`
+
+Configures Dapr workflow concurrency and state retention.
+
+<ParamField body="spec.workflow.maxConcurrentWorkflowInvocations" type="number">
+  Maximum number of workflow instances that can be actively executing on a single Dapr instance at one time. Excess invocations are queued. Omit for no limit.
+</ParamField>
+
+<ParamField body="spec.workflow.maxConcurrentActivityInvocations" type="number">
+  Maximum number of workflow activities that can be concurrently processed by a single Dapr instance. Excess activities are queued. Omit for no limit.
+</ParamField>
+
+<ParamField body="spec.workflow.stateRetentionPolicy" type="object">
+  Retention policy for completed workflow state. If not set, workflow instances are not automatically purged.
+</ParamField>
+
+<ParamField body="spec.workflow.stateRetentionPolicy.anyTerminal" type="string">
+  Duration after which workflow instances that have reached **any** terminal state are purged (e.g., `"72h"`).
+</ParamField>
+
+<ParamField body="spec.workflow.stateRetentionPolicy.completed" type="string">
+  Duration after which **completed** workflow instances are purged. Takes precedence over `anyTerminal` for completed instances.
+</ParamField>
+
+<ParamField body="spec.workflow.stateRetentionPolicy.failed" type="string">
+  Duration after which **failed** workflow instances are purged.
+</ParamField>
+
+<ParamField body="spec.workflow.stateRetentionPolicy.terminated" type="string">
+  Duration after which **terminated** workflow instances are purged.
+</ParamField>
+
+---
+
+### `spec.wasm`
+
+<ParamField body="spec.wasm.strictSandbox" type="boolean" default="false">
+  Forces all WASM components to run in strict sandbox mode, regardless of their individual configuration. Strict mode disables real-time clocks and random number generators inside the WASM module.
+</ParamField>
+
+---
+
+### `spec.api`
+
+Restricts which Dapr API endpoints are accessible to the application.
+
+<ParamField body="spec.api.allowed" type="object[]">
+  Allowlist of APIs the application can call. Each entry specifies `name`, `version`, and `protocol` (`"http"` or `"grpc"`).
+</ParamField>
+
+<ParamField body="spec.api.denied" type="object[]">
+  Denylist of APIs the application must not call. Same structure as `allowed`. Can be used together with `allowed`.
+</ParamField>
+
+<Tip>
+  When neither `allowed` nor `denied` is set, all Dapr APIs are accessible. Use `denied` to block specific APIs while leaving the rest open, or use `allowed` to create an explicit allowlist.
+</Tip>

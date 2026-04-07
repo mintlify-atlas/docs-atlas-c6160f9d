@@ -1,0 +1,223 @@
+---
+title: "Observability"
+description: "Configure distributed tracing, Prometheus metrics, structured logging, and health endpoints for Dapr deployments."
+keywords: ["dapr", "observability", "tracing", "metrics", "prometheus", "zipkin", "jaeger", "opentelemetry", "grafana", "logging"]
+---
+
+Dapr provides three pillars of observability out of the box: distributed tracing, Prometheus-compatible metrics, and structured logging. All three are built into `daprd` — no additional SDK or instrumentation code is required in your application.
+
+<CardGroup cols={3}>
+  <Card title="Distributed tracing" icon="route">
+    W3C trace context propagation with export to Zipkin, Jaeger, or any OTLP-compatible backend.
+  </Card>
+  <Card title="Metrics" icon="chart-bar">
+    Prometheus-compatible metrics endpoint at `:9090/metrics` with Grafana dashboard support.
+  </Card>
+  <Card title="Logging" icon="scroll">
+    Structured JSON logs for every Dapr sidecar and control plane service, with configurable log levels.
+  </Card>
+</CardGroup>
+
+## Distributed tracing
+
+Dapr propagates the [W3C Trace Context](https://www.w3.org/TR/trace-context/) standard, using `traceparent` and `tracestate` headers on all HTTP calls and the equivalent gRPC metadata on gRPC calls. Dapr creates spans for every service invocation, pub/sub message, and binding interaction automatically.
+
+### Configure tracing in a Dapr Configuration
+
+Tracing is configured in the `spec.tracing` section of a Dapr `Configuration` resource.
+
+<Tabs>
+  <Tab title="Zipkin">
+    ```yaml
+    apiVersion: dapr.io/v1alpha1
+    kind: Configuration
+    metadata:
+      name: tracing
+      namespace: default
+    spec:
+      tracing:
+        samplingRate: "1"
+        zipkin:
+          endpointAddress: http://zipkin:9411/api/v2/spans
+    ```
+  </Tab>
+  <Tab title="OpenTelemetry (OTLP)">
+    ```yaml
+    apiVersion: dapr.io/v1alpha1
+    kind: Configuration
+    metadata:
+      name: tracing
+      namespace: default
+    spec:
+      tracing:
+        samplingRate: "1"
+        otel:
+          endpointAddress: otel-collector:4317
+          protocol: grpc
+          isSecure: false
+    ```
+  </Tab>
+  <Tab title="Jaeger (via OTLP)">
+    ```yaml
+    apiVersion: dapr.io/v1alpha1
+    kind: Configuration
+    metadata:
+      name: tracing
+      namespace: default
+    spec:
+      tracing:
+        samplingRate: "1"
+        otel:
+          endpointAddress: jaeger-collector:4317
+          protocol: grpc
+          isSecure: false
+    ```
+  </Tab>
+</Tabs>
+
+### Sampling rate
+
+`samplingRate` controls the fraction of requests that generate a trace. It is a string representation of a float between `"0"` and `"1"`:
+
+| Value | Behavior |
+|---|---|
+| `"1"` | Sample every request (100%) |
+| `"0.5"` | Sample 50% of requests |
+| `"0"` | Disable tracing entirely |
+
+<Tip>
+  In development, set `samplingRate: "1"` to capture all traces. In production, lower the rate (e.g., `"0.1"`) to reduce overhead and storage costs.
+</Tip>
+
+### OTLP exporter options
+
+The `spec.tracing.otel` section maps directly to the `OtelSpec` struct in the Dapr configuration package:
+
+| Field | Type | Description |
+|---|---|---|
+| `endpointAddress` | string | Host and port of the OTLP collector (e.g., `otel-collector:4317`). |
+| `protocol` | string | `grpc` or `http`. |
+| `isSecure` | boolean | Whether to use TLS. Defaults to `true`. |
+| `headers` | list | Additional headers to include in exporter requests (format: `"key=value"`). |
+| `timeout` | duration | Timeout for exporter requests. |
+
+## Metrics
+
+Dapr exposes a Prometheus-compatible metrics endpoint on each sidecar and control plane service. By default, the metrics port is `9090`.
+
+### Metrics categories
+
+Dapr organizes metrics into six categories, each initialized in `pkg/diagnostics/metrics.go`:
+
+| Category | Description |
+|---|---|
+| **Service metrics** | Request count, latency, and failure rates for service invocation, including mTLS cert rotation counts. |
+| **gRPC metrics** | Per-method call counts and latency histograms for gRPC endpoints. |
+| **HTTP metrics** | Per-path request counts, status codes, and latency histograms for HTTP endpoints. |
+| **Component metrics** | Load, init success/failure, and call latency for each component. |
+| **Resiliency metrics** | Timeout activations, retry activations, and circuit breaker state changes. |
+| **Workflow metrics** | Workflow and activity invocation counts and status breakdowns. |
+
+### Enable and configure metrics
+
+Metrics are enabled by default. To disable or customize them, set `spec.metrics` (or `spec.metric`) in a `Configuration`:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: appconfig
+spec:
+  metrics:
+    enabled: true
+    http:
+      increasedCardinality: false
+    latencyDistributionBuckets:
+      - 1
+      - 2
+      - 5
+      - 10
+      - 25
+      - 50
+      - 100
+      - 250
+      - 500
+      - 1000
+```
+
+<Note>
+  The `http.increasedCardinality` field controls whether per-path HTTP metrics are broken down by full URL path or by matched route pattern. Setting it to `false` (recommended for production) reduces cardinality and storage overhead.
+</Note>
+
+### Prometheus scrape configuration
+
+In Kubernetes, add the standard Prometheus annotations to your pod to enable scraping:
+
+```yaml
+annotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9090"
+  prometheus.io/path: "/metrics"
+```
+
+### Grafana dashboards
+
+The Dapr project publishes official Grafana dashboard JSON files for the sidecar and control plane components. Import them from the [dapr/dapr GitHub repository](https://github.com/dapr/dapr/tree/master/grafana).
+
+## Logging
+
+Every Dapr process emits structured JSON logs by default in Kubernetes and plain-text logs in self-hosted mode. You can force JSON logging in self-hosted mode with the `--log-as-json` flag.
+
+### Log level
+
+Set the log level with the `--log-level` flag on `daprd` or via the pod annotation:
+
+```yaml
+dapr.io/log-level: "debug"
+```
+
+Available levels: `debug`, `info` (default), `warn`, `error`.
+
+### Enable JSON logging in Helm
+
+```bash
+helm install dapr dapr/dapr \
+  --namespace dapr-system \
+  --set global.logAsJson=true
+```
+
+### API call logging
+
+To log every API call made through the sidecar, enable API logging:
+
+```yaml
+dapr.io/enable-api-logging: "true"
+```
+
+Or set it globally in a `Configuration`:
+
+```yaml
+spec:
+  logging:
+    apiLogging:
+      enabled: true
+      obfuscateURLs: false
+      omitHealthChecks: true
+```
+
+## Health endpoints
+
+Both the sidecar and the control plane services expose health endpoints:
+
+| Endpoint | Service | Description |
+|---|---|---|
+| `GET /v1.0/healthz` | `daprd` | Returns `200` when the sidecar is initialized and healthy. |
+| `GET /v1.0/healthz/outbound` | `daprd` | Returns `200` when all outbound dependencies (components, placement) are ready. Used by readiness probes. |
+
+### Kubernetes liveness and readiness probes
+
+The sidecar injector configures liveness and readiness probes on the `daprd` container automatically. The readiness probe uses `/v1.0/healthz/outbound` to prevent traffic from reaching your app until Dapr is fully initialized.
+
+<Warning>
+  Do not configure your application's readiness probe to pass before the Dapr sidecar is ready. On Kubernetes, the sidecar injector handles probe ordering automatically. In self-hosted mode, wait for the `daprd` process to log `"dapr initialized"` before sending traffic.
+</Warning>

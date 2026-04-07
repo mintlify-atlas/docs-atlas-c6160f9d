@@ -1,0 +1,225 @@
+---
+title: "Configuration API"
+description: "Read configuration items and subscribe to live configuration updates from Dapr configuration store components."
+---
+
+The Configuration API reads application configuration from pluggable configuration store components (Azure App Configuration, Redis, Kubernetes ConfigMaps, etc.). It also supports subscribing to live configuration changes so your application can react without restarting.
+
+## Endpoints
+
+| Method | Path | Versions | Description |
+|---|---|---|---|
+| `GET` | `/v1.0/configuration/{storeName}` | v1.0, v1.0-alpha1 | Get configuration items. |
+| `GET` | `/v1.0/configuration/{storeName}/subscribe` | v1.0, v1.0-alpha1 | Subscribe to configuration changes. |
+| `GET` | `/v1.0/configuration/{storeName}/{configurationSubscribeID}/unsubscribe` | v1.0, v1.0-alpha1 | Unsubscribe from configuration changes. |
+
+<Note>
+  All endpoints are available in both `v1.0` (stable) and `v1.0-alpha1`. Use `v1.0` for production workloads.
+</Note>
+
+---
+
+## Get configuration
+
+```
+GET http://localhost:3500/v1.0/configuration/{storeName}
+```
+
+Retrieves one or more configuration items from the named store. Omit `key` query parameters to retrieve all items.
+
+### Path parameters
+
+<ParamField path="storeName" type="string" required>
+  Name of the configuration store component as declared in your Dapr component YAML.
+</ParamField>
+
+### Query parameters
+
+<ParamField query="key" type="string">
+  A configuration key to fetch. Can be repeated to fetch multiple keys at once (e.g., `?key=featureA&key=featureB`). Omit to return all keys.
+</ParamField>
+
+<ParamField query="metadata.*" type="string">
+  Component-specific metadata as query parameters with the `metadata.` prefix.
+</ParamField>
+
+### Response
+
+A JSON object mapping each key to its configuration item.
+
+<ResponseField name="{key}" type="object">
+  A configuration item.
+  <Expandable title="item properties">
+    <ResponseField name="value" type="string">
+      The configuration value.
+    </ResponseField>
+    <ResponseField name="version" type="string">
+      The version of this configuration item, if the store supports versioning.
+    </ResponseField>
+    <ResponseField name="metadata" type="object">
+      Component-specific metadata for this item.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json
+{
+  "featureA": {
+    "value": "true",
+    "version": "3",
+    "metadata": {}
+  },
+  "featureB": {
+    "value": "disabled",
+    "version": "1",
+    "metadata": {}
+  }
+}
+```
+
+Returns `204 No Content` if no matching keys are found.
+
+### Example
+
+```bash
+# Get all configuration items
+curl http://localhost:3500/v1.0/configuration/myconfig
+
+# Get specific keys
+curl "http://localhost:3500/v1.0/configuration/myconfig?key=featureA&key=featureB"
+```
+
+### Error codes
+
+| Status | Description |
+|---|---|
+| `200` | Items returned. |
+| `204` | No items found for the requested keys. |
+| `400` | Configuration store not found. |
+| `500` | Configuration store error. |
+
+---
+
+## Subscribe to configuration changes
+
+```
+GET http://localhost:3500/v1.0/configuration/{storeName}/subscribe
+```
+
+Subscribes to configuration changes for the specified keys. Returns a subscription ID that must be used to unsubscribe. When a key changes, Dapr calls your application at `/configuration/{storeName}/{key}` via `POST`.
+
+### Path parameters
+
+<ParamField path="storeName" type="string" required>
+  Name of the configuration store component.
+</ParamField>
+
+### Query parameters
+
+<ParamField query="key" type="string">
+  A key to subscribe to. Can be repeated to subscribe to multiple keys. Omit to subscribe to all keys.
+</ParamField>
+
+<ParamField query="metadata.*" type="string">
+  Component-specific metadata.
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string">
+  The subscription ID. Store this value; you need it to unsubscribe.
+</ResponseField>
+
+```json
+{
+  "id": "subscription-abc123"
+}
+```
+
+### Change notification delivery
+
+When a subscribed key changes, Dapr delivers a `POST` request to your application:
+
+```
+POST /configuration/{storeName}/{key}
+```
+
+With a body containing the updated items:
+
+```json
+{
+  "items": {
+    "featureA": {
+      "value": "false",
+      "version": "4",
+      "metadata": {}
+    }
+  }
+}
+```
+
+### Example
+
+```bash
+# Subscribe to featureA and featureB changes
+curl "http://localhost:3500/v1.0/configuration/myconfig/subscribe?key=featureA&key=featureB"
+```
+
+Response:
+```json
+{"id": "sub-7f3a2b1c"}
+```
+
+### Error codes
+
+| Status | Description |
+|---|---|
+| `200` | Subscription created. |
+| `500` | Subscription failed — store error or app channel unavailable. |
+
+---
+
+## Unsubscribe from configuration changes
+
+```
+GET http://localhost:3500/v1.0/configuration/{storeName}/{configurationSubscribeID}/unsubscribe
+```
+
+Cancels a configuration subscription. After this call, Dapr will no longer deliver change notifications to your application for this subscription.
+
+### Path parameters
+
+<ParamField path="storeName" type="string" required>
+  Name of the configuration store component.
+</ParamField>
+
+<ParamField path="configurationSubscribeID" type="string" required>
+  The subscription ID returned by the subscribe endpoint.
+</ParamField>
+
+### Response
+
+<ResponseField name="ok" type="boolean">
+  `true` if the subscription was successfully cancelled.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Error message if `ok` is `false`.
+</ResponseField>
+
+```json
+{ "ok": true }
+```
+
+### Example
+
+```bash
+curl "http://localhost:3500/v1.0/configuration/myconfig/sub-7f3a2b1c/unsubscribe"
+```
+
+### Error codes
+
+| Status | Description |
+|---|---|
+| `200` | Unsubscribed (check `ok` field). |
+| `500` | Error unsubscribing. The `message` field contains details. |

@@ -1,0 +1,295 @@
+---
+title: "Workflows API"
+description: "Start, query, pause, resume, terminate, purge, and raise events on Dapr workflow instances."
+---
+
+The Workflows API manages long-running, stateful workflow instances. Dapr supports the `dapr` built-in workflow component and other workflow backends. All endpoints are available in `v1.0`, `v1.0-beta1`, and `v1.0-alpha1`.
+
+## Endpoints
+
+| Method | Path | Versions | Description |
+|---|---|---|---|
+| `POST` | `/v1.0/workflows/{workflowComponent}/{workflowName}/start` | v1.0, v1.0-beta1, v1.0-alpha1 | Start a new workflow instance. |
+| `GET` | `/v1.0/workflows/{workflowComponent}/{instanceID}` | v1.0, v1.0-beta1, v1.0-alpha1 | Get the status of a workflow instance. |
+| `POST` | `/v1.0/workflows/{workflowComponent}/{instanceID}/raiseEvent/{eventName}` | v1.0, v1.0-beta1, v1.0-alpha1 | Raise an event on a running workflow. |
+| `POST` | `/v1.0/workflows/{workflowComponent}/{instanceID}/pause` | v1.0, v1.0-beta1, v1.0-alpha1 | Pause a running workflow. |
+| `POST` | `/v1.0/workflows/{workflowComponent}/{instanceID}/resume` | v1.0, v1.0-beta1, v1.0-alpha1 | Resume a paused workflow. |
+| `POST` | `/v1.0/workflows/{workflowComponent}/{instanceID}/terminate` | v1.0, v1.0-beta1, v1.0-alpha1 | Terminate a running workflow. |
+| `POST` | `/v1.0/workflows/{workflowComponent}/{instanceID}/purge` | v1.0, v1.0-beta1, v1.0-alpha1 | Purge a completed or terminated workflow's history. |
+
+---
+
+## Common path parameters
+
+<ParamField path="workflowComponent" type="string" required>
+  The workflow component name. For the built-in Dapr workflow engine, use `dapr`.
+</ParamField>
+
+---
+
+## Start workflow
+
+```
+POST http://localhost:3500/v1.0/workflows/{workflowComponent}/{workflowName}/start
+```
+
+Starts a new instance of the named workflow. Returns `202 Accepted`.
+
+### Path parameters
+
+<ParamField path="workflowName" type="string" required>
+  The name of the workflow definition to run (as registered by your workflow application).
+</ParamField>
+
+### Query parameters
+
+<ParamField query="instanceID" type="string">
+  A user-specified identifier for this workflow instance. If omitted, Dapr generates a unique ID. Must be unique within the workflow component.
+</ParamField>
+
+### Request body
+
+The body is passed as the raw workflow input without transformation. Use any format your workflow expects (JSON is typical).
+
+```json
+{
+  "orderId": "1001",
+  "customerId": "customer-42",
+  "items": [
+    { "sku": "WIDGET-A", "quantity": 5 }
+  ]
+}
+```
+
+### Response
+
+<ResponseField name="instanceID" type="string">
+  The instance ID of the started workflow (either user-supplied or Dapr-generated).
+</ResponseField>
+
+```json
+{
+  "instanceID": "order-workflow-1001"
+}
+```
+
+### Example
+
+```bash
+curl -X POST "http://localhost:3500/v1.0/workflows/dapr/OrderWorkflow/start?instanceID=order-workflow-1001" \
+  -H "Content-Type: application/json" \
+  -d '{"orderId": "1001", "customerId": "customer-42"}'
+```
+
+---
+
+## Get workflow status
+
+```
+GET http://localhost:3500/v1.0/workflows/{workflowComponent}/{instanceID}
+```
+
+Returns the current status and metadata of a workflow instance.
+
+### Path parameters
+
+<ParamField path="instanceID" type="string" required>
+  The workflow instance ID returned by the start operation.
+</ParamField>
+
+### Response
+
+<ResponseField name="instanceID" type="string">
+  The workflow instance ID.
+</ResponseField>
+
+<ResponseField name="workflowName" type="string">
+  The workflow definition name.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  RFC3339 timestamp of when the workflow was created.
+</ResponseField>
+
+<ResponseField name="lastUpdatedAt" type="string">
+  RFC3339 timestamp of the last state change.
+</ResponseField>
+
+<ResponseField name="runtimeStatus" type="string">
+  Current lifecycle status. See [Runtime status values](#runtime-status-values).
+</ResponseField>
+
+<ResponseField name="serializedInput" type="string">
+  The workflow input (JSON-encoded string).
+</ResponseField>
+
+<ResponseField name="serializedOutput" type="string">
+  The workflow output, if completed (JSON-encoded string).
+</ResponseField>
+
+<ResponseField name="serializedCustomStatus" type="string">
+  A custom status string set by the workflow itself.
+</ResponseField>
+
+<ResponseField name="failureDetails" type="object">
+  Error information if the workflow failed.
+  <Expandable title="failureDetails properties">
+    <ResponseField name="type" type="string">Error type.</ResponseField>
+    <ResponseField name="message" type="string">Human-readable error message.</ResponseField>
+    <ResponseField name="innerFailure" type="object">Nested cause, if any.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json
+{
+  "instanceID": "order-workflow-1001",
+  "workflowName": "OrderWorkflow",
+  "createdAt": "2024-01-15T10:00:00Z",
+  "lastUpdatedAt": "2024-01-15T10:01:30Z",
+  "runtimeStatus": "COMPLETED",
+  "serializedInput": "{\"orderId\":\"1001\"}",
+  "serializedOutput": "{\"trackingNumber\":\"TRK-9876\"}",
+  "serializedCustomStatus": "",
+  "failureDetails": null
+}
+```
+
+### Runtime status values
+
+| Value | Description |
+|---|---|
+| `RUNNING` | The workflow is actively executing. |
+| `COMPLETED` | The workflow completed successfully. |
+| `FAILED` | The workflow failed. See `failureDetails`. |
+| `CANCELED` | The workflow was canceled. |
+| `TERMINATED` | The workflow was forcefully terminated via the terminate API. |
+| `PENDING` | The workflow is scheduled but has not started. |
+| `SUSPENDED` | The workflow is paused. |
+
+### Example
+
+```bash
+curl http://localhost:3500/v1.0/workflows/dapr/order-workflow-1001
+```
+
+---
+
+## Raise event
+
+```
+POST http://localhost:3500/v1.0/workflows/{workflowComponent}/{instanceID}/raiseEvent/{eventName}
+```
+
+Sends an external event to a running workflow instance. Returns `202 Accepted`. The workflow must be waiting for this event (e.g., via `waitForExternalEvent`).
+
+### Path parameters
+
+<ParamField path="instanceID" type="string" required>
+  The workflow instance ID.
+</ParamField>
+
+<ParamField path="eventName" type="string" required>
+  The name of the event to raise. Must match the name the workflow is waiting for.
+</ParamField>
+
+### Request body
+
+The event payload, passed as the raw event data to the workflow.
+
+```json
+{
+  "approved": true,
+  "approvedBy": "manager@example.com"
+}
+```
+
+### Example
+
+```bash
+curl -X POST http://localhost:3500/v1.0/workflows/dapr/order-workflow-1001/raiseEvent/approval \
+  -H "Content-Type: application/json" \
+  -d '{"approved": true}'
+```
+
+---
+
+## Pause workflow
+
+```
+POST http://localhost:3500/v1.0/workflows/{workflowComponent}/{instanceID}/pause
+```
+
+Suspends a running workflow instance. The workflow will not advance until resumed. Returns `202 Accepted` with an empty body.
+
+### Path parameters
+
+<ParamField path="instanceID" type="string" required>
+  The workflow instance ID to pause.
+</ParamField>
+
+---
+
+## Resume workflow
+
+```
+POST http://localhost:3500/v1.0/workflows/{workflowComponent}/{instanceID}/resume
+```
+
+Resumes a previously suspended workflow instance. Returns `202 Accepted` with an empty body.
+
+### Path parameters
+
+<ParamField path="instanceID" type="string" required>
+  The workflow instance ID to resume.
+</ParamField>
+
+---
+
+## Terminate workflow
+
+```
+POST http://localhost:3500/v1.0/workflows/{workflowComponent}/{instanceID}/terminate
+```
+
+Forcefully stops a running workflow instance. The workflow status changes to `TERMINATED`. Returns `202 Accepted` with an empty body.
+
+<Warning>
+  Termination is immediate and does not allow the workflow to complete gracefully. Use pause/resume if you need controlled suspension.
+</Warning>
+
+### Path parameters
+
+<ParamField path="instanceID" type="string" required>
+  The workflow instance ID to terminate.
+</ParamField>
+
+---
+
+## Purge workflow
+
+```
+POST http://localhost:3500/v1.0/workflows/{workflowComponent}/{instanceID}/purge
+```
+
+Permanently removes the workflow instance history and state from the backend store. The workflow must be in a terminal state (`COMPLETED`, `FAILED`, `TERMINATED`) before it can be purged. Returns `202 Accepted` with an empty body.
+
+<Note>
+  After purging, `GET` on the instance ID will return `404 Not Found`. Purge is irreversible.
+</Note>
+
+### Path parameters
+
+<ParamField path="instanceID" type="string" required>
+  The workflow instance ID to purge.
+</ParamField>
+
+---
+
+## Error codes
+
+| Status | Description |
+|---|---|
+| `202` | Operation accepted. |
+| `400` | Missing or invalid parameters (e.g., empty instance ID). |
+| `404` | Workflow instance not found. |
+| `500` | Workflow component error. |

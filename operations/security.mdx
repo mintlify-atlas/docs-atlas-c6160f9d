@@ -1,0 +1,243 @@
+---
+title: "Security"
+description: "Secure Dapr deployments with automatic mTLS, SPIFFE-based certificates, token authentication, access control, and secrets scoping."
+keywords: ["dapr", "security", "mtls", "mTLS", "sentry", "SPIFFE", "certificate", "token", "access control", "secrets", "network policy"]
+---
+
+Dapr is built with a zero-trust security model. All sidecar-to-sidecar communication is encrypted by default, identities are backed by SPIFFE-compatible certificates, and access to APIs and secrets can be scoped declaratively in YAML without changing application code.
+
+<CardGroup cols={2}>
+  <Card title="mTLS" icon="lock">
+    All inter-sidecar communication is mutually authenticated and encrypted via TLS. No configuration required.
+  </Card>
+  <Card title="SPIFFE identities" icon="id-card">
+    Dapr Sentry issues X.509 SVIDs to each sidecar, giving every app a cryptographic identity tied to its app ID and namespace.
+  </Card>
+  <Card title="Token authentication" icon="key">
+    Apps can require Dapr to present a shared token on inbound calls, and require a token from callers to the Dapr API.
+  </Card>
+  <Card title="Access control" icon="shield-check">
+    Declarative ACL policies restrict which app IDs can call which operations on your app.
+  </Card>
+</CardGroup>
+
+## mTLS
+
+Dapr enables mutual TLS between all sidecars by default. Every `daprd` instance obtains a short-lived X.509 certificate from the Dapr Sentry service at startup. These certificates are used to authenticate and encrypt all gRPC connections between sidecars.
+
+### How it works
+
+<Steps>
+  <Step title="Sidecar starts">
+    `daprd` contacts the Dapr Sentry service at its configured address (e.g., `dapr-sentry.dapr-system.svc.cluster.local:443`).
+  </Step>
+  <Step title="Certificate request">
+    `daprd` sends a certificate signing request (CSR) authenticated with a bound service account token (in Kubernetes) or other credential.
+  </Step>
+  <Step title="Certificate issuance">
+    Sentry validates the identity and issues an X.509 SVID with a SPIFFE ID in the form `spiffe://<trust-domain>/ns/<namespace>/app/<app-id>`.
+  </Step>
+  <Step title="mTLS established">
+    All outbound gRPC connections from `daprd` to other sidecars present this certificate. The receiving sidecar validates the certificate against the trust anchor bundle.
+  </Step>
+  <Step title="Automatic rotation">
+    Before the certificate expires, `daprd` automatically requests a new certificate from Sentry. The default TTL is 24 hours with automatic rotation.
+  </Step>
+</Steps>
+
+### mTLS configuration
+
+Control mTLS settings in a Dapr `Configuration` resource or in the Helm chart values:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: appconfig
+  namespace: default
+spec:
+  mtls:
+    enabled: true
+    workloadCertTTL: 24h
+    allowedClockSkew: 15m
+```
+
+| Field | Default | Description |
+|---|---|---|
+| `enabled` | `true` | Enable or disable mTLS. Do not disable in production. |
+| `workloadCertTTL` | `24h` | Lifetime of issued workload certificates. |
+| `allowedClockSkew` | `15m` | Maximum allowed clock skew between nodes when validating certificate expiry. |
+
+The same settings can be configured at install time via Helm:
+
+```bash
+helm install dapr dapr/dapr \
+  --namespace dapr-system \
+  --set global.mtls.enabled=true \
+  --set global.mtls.workloadCertTTL=24h \
+  --set global.mtls.allowedClockSkew=15m
+```
+
+<Warning>
+  Disabling mTLS (`enabled: false`) removes encryption and mutual authentication from all sidecar-to-sidecar communication. Only disable mTLS in isolated development environments where network security is controlled by other means.
+</Warning>
+
+### Trust domain
+
+By default, all Dapr sidecars in a cluster share the trust domain `cluster.local`. The trust domain is part of the SPIFFE ID and determines which Sentry CA is trusted.
+
+In Helm:
+
+```bash
+--set global.mtls.controlPlaneTrustDomain=cluster.local
+```
+
+## Sentry (certificate authority)
+
+Sentry is the Dapr component that acts as the certificate authority. It:
+
+- Issues short-lived X.509 certificates (SVIDs) to each `daprd` instance.
+- Maintains the root CA and issuer certificates.
+- Distributes the trust anchor bundle (CA certificate) to all sidecars.
+- Supports bringing your own CA by configuring custom issuer certificates.
+
+### Custom CA certificates
+
+To use your own CA, mount the CA certificate, issuer certificate, and issuer private key into the Sentry pod. Configure the file names in Helm:
+
+```yaml
+global:
+  issuerFilenames:
+    ca: "ca.crt"
+    cert: "tls.crt"
+    key: "tls.key"
+```
+
+## Token authentication
+
+### App API token
+
+Restrict which callers can invoke the Dapr API on a sidecar by requiring a token. Set the `DAPR_API_TOKEN` environment variable on the `daprd` process (or via the pod annotation). Callers must include the token in the `dapr-api-token` HTTP header.
+
+```yaml
+# In a Kubernetes Deployment
+env:
+  - name: DAPR_API_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: dapr-api-token
+        key: token
+```
+
+### App token
+
+Require Dapr to include a token when calling your app. Set the `APP_API_TOKEN` environment variable on your application container. Dapr will include this token in the `dapr-app-token` HTTP header on every callback to your app.
+
+```yaml
+env:
+  - name: APP_API_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: app-token
+        key: token
+```
+
+## Access control
+
+Access control lists (ACLs) restrict which Dapr app IDs can invoke which operations on your app. Define them in the `spec.accessControl` section of a `Configuration` resource:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: appconfig
+  namespace: default
+spec:
+  accessControl:
+    defaultAction: deny
+    trustDomain: cluster.local
+    policies:
+      - appId: orderservice
+        defaultAction: deny
+        trustDomain: cluster.local
+        namespace: default
+        operations:
+          - name: /orders
+            httpVerb:
+              - POST
+              - GET
+            action: allow
+```
+
+| Field | Values | Description |
+|---|---|---|
+| `defaultAction` | `allow`, `deny` | Default action when no policy matches. |
+| `trustDomain` | string | SPIFFE trust domain of the calling app. |
+| `appId` | string | The caller's Dapr app ID. |
+| `operations[].name` | string | Operation name or HTTP path (for HTTP) / method name (for gRPC). |
+| `operations[].httpVerb` | list | HTTP verbs this rule applies to. Omit for gRPC. |
+| `operations[].action` | `allow`, `deny` | Whether to allow or deny this operation. |
+
+<Note>
+  Access control is evaluated on the **receiving** sidecar. The calling app's identity is verified via its mTLS certificate, so the `appId` in the policy is cryptographically bound — it cannot be spoofed.
+</Note>
+
+## Secrets scoping
+
+Restrict which secrets a given app can read from a named secret store:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: appconfig
+  namespace: default
+spec:
+  secrets:
+    scopes:
+      - storeName: vault
+        defaultAccess: deny
+        allowedSecrets:
+          - db-password
+          - api-key
+      - storeName: kubernetes
+        defaultAccess: allow
+        deniedSecrets:
+          - admin-credentials
+```
+
+| Field | Description |
+|---|---|
+| `storeName` | Name of the secret store component to scope. |
+| `defaultAccess` | `allow` or `deny`. Applied when a secret is not in either list. |
+| `allowedSecrets` | Explicit allowlist. The app can only read secrets in this list (when `defaultAccess: deny`). |
+| `deniedSecrets` | Explicit denylist. The app cannot read secrets in this list (when `defaultAccess: allow`). |
+
+## Network policies
+
+In Kubernetes, use `NetworkPolicy` resources to restrict traffic at the network layer in addition to Dapr's application-layer controls. A baseline set of policies for a Dapr deployment should:
+
+- Allow ingress to `dapr-sentry` on port `443` from all `dapr-system` pods.
+- Allow ingress to `dapr-placement` on its gRPC port from all sidecars.
+- Allow sidecar-to-sidecar gRPC traffic (port `50001` by default) within the namespace.
+- Deny all other ingress to `dapr-system` from outside the namespace.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dapr-sidecar
+  namespace: default
+spec:
+  podSelector: {}
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 50001
+  policyTypes:
+    - Ingress
+```
+
+<Tip>
+  Combine Kubernetes `NetworkPolicy` with Dapr's ACLs for a defense-in-depth security posture: `NetworkPolicy` controls which pods can communicate at all, while Dapr ACLs control which operations are permitted between authenticated app identities.
+</Tip>

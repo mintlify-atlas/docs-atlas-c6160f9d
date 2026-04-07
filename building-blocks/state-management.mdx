@@ -1,0 +1,444 @@
+---
+title: "State management"
+description: "Store and retrieve key/value state through a portable API backed by Redis, PostgreSQL, CosmosDB, DynamoDB, and more."
+keywords: ["state management", "key value store", "state store", "Redis", "transactions", "ETags", "concurrency"]
+---
+
+The Dapr state management building block provides a key/value API for storing and querying application state. By targeting the Dapr API rather than a specific database SDK, your application remains portable across state backends without code changes.
+
+<CardGroup cols={2}>
+  <Card title="Pluggable backends" icon="database">
+    Switch between Redis, PostgreSQL, Azure CosmosDB, AWS DynamoDB, and others by changing a component YAML — no code changes needed.
+  </Card>
+  <Card title="Transactions" icon="arrow-right-arrow-left">
+    Execute multiple get, set, and delete operations atomically within a single request against supporting stores.
+  </Card>
+  <Card title="Concurrency control" icon="code-branch">
+    Choose first-write-wins or last-write-wins semantics. Use ETags for optimistic concurrency in collaborative scenarios.
+  </Card>
+  <Card title="Consistency models" icon="sliders">
+    Select strong or eventual consistency per-request to match the durability requirements of each operation.
+  </Card>
+</CardGroup>
+
+## HTTP API reference
+
+All state routes are served by the Dapr sidecar at `http://localhost:3500`.
+
+### Get a single value
+
+```
+GET /v1.0/state/{storeName}/{key}
+```
+
+<ParamField path="storeName" type="string" required>
+  Name of the state store component as declared in its component metadata.
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  The key to retrieve. Dapr namespaces the key with the app ID to prevent collisions between applications.
+</ParamField>
+
+<ParamField query="consistency" type="string">
+  `strong` or `eventual`. Defaults to the component's default consistency level.
+</ParamField>
+
+Returns the raw value with `200 OK`, or `204 No Content` if the key does not exist.
+
+```bash
+curl http://localhost:3500/v1.0/state/statestore/cart-user42
+```
+
+### Save one or more values
+
+```
+POST /v1.0/state/{storeName}
+```
+
+Accepts a JSON array of state objects. Multiple items in the array are written in a single request (but not transactionally — use `/transaction` for atomicity).
+
+```bash
+curl -X POST http://localhost:3500/v1.0/state/statestore \
+  -H "Content-Type: application/json" \
+  -d '[
+    {
+      "key": "cart-user42",
+      "value": {"items": [{"sku": "widget", "qty": 2}]},
+      "options": {
+        "concurrency": "last-write",
+        "consistency": "strong"
+      }
+    }
+  ]'
+```
+
+Each state object in the array accepts:
+
+<ParamField body="key" type="string" required>
+  The key to write.
+</ParamField>
+
+<ParamField body="value" type="any" required>
+  The value to store. Can be any JSON-serializable type.
+</ParamField>
+
+<ParamField body="etag" type="string">
+  An ETag for optimistic concurrency. If provided and the stored ETag does not match, the write is rejected with `409 Conflict`.
+</ParamField>
+
+<ParamField body="options.concurrency" type="string">
+  `first-write` or `last-write`. Controls behavior when an ETag mismatch occurs.
+</ParamField>
+
+<ParamField body="options.consistency" type="string">
+  `strong` or `eventual`.
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  Component-specific metadata passed to the backing store (e.g., TTL hints).
+</ParamField>
+
+### Delete a value
+
+```
+DELETE /v1.0/state/{storeName}/{key}
+```
+
+Returns `204 No Content` on success.
+
+```bash
+curl -X DELETE http://localhost:3500/v1.0/state/statestore/cart-user42
+```
+
+### Bulk get
+
+```
+POST /v1.0/state/{storeName}/bulk
+```
+
+Retrieve multiple keys in a single round-trip.
+
+```bash
+curl -X POST http://localhost:3500/v1.0/state/statestore/bulk \
+  -H "Content-Type: application/json" \
+  -d '{
+    "keys": ["cart-user42", "cart-user99"],
+    "parallelism": 10
+  }'
+```
+
+<ParamField body="keys" type="string[]" required>
+  Array of keys to fetch.
+</ParamField>
+
+<ParamField body="parallelism" type="number">
+  Number of concurrent reads the sidecar issues to the backing store. Defaults to `10`.
+</ParamField>
+
+Returns an array where each element contains the `key`, `data`, `etag`, and any error for that key.
+
+### Transactional operations
+
+```
+POST /v1.0/state/{storeName}/transaction
+```
+
+Execute a set of upsert and delete operations atomically. Requires a state store that supports transactions (e.g., Redis, PostgreSQL).
+
+```bash
+curl -X POST http://localhost:3500/v1.0/state/statestore/transaction \
+  -H "Content-Type: application/json" \
+  -d '{
+    "operations": [
+      {
+        "operation": "upsert",
+        "request": {
+          "key": "cart-user42",
+          "value": {"items": [{"sku": "gadget", "qty": 1}]}
+        }
+      },
+      {
+        "operation": "delete",
+        "request": {
+          "key": "pending-user42"
+        }
+      }
+    ],
+    "metadata": {
+      "partitionKey": "user42"
+    }
+  }'
+```
+
+<ParamField body="operations" type="object[]" required>
+  Array of operations. Each must have `operation` (`upsert` or `delete`) and a `request` object with at minimum a `key`.
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  Store-specific metadata, such as a partition key for CosmosDB.
+</ParamField>
+
+<Note>
+  Not all state stores support transactions. Check the component's feature matrix before relying on transactional behavior. Attempting a transaction against a non-transactional store returns `405 Method Not Allowed`.
+</Note>
+
+### Alpha: query state
+
+```
+POST /v1.0-alpha1/state/{storeName}/query
+```
+
+Filter and sort state entries using a structured query. Only available on stores that implement the query interface (e.g., MongoDB, CosmosDB, PostgreSQL with the query filter feature).
+
+## Consistency models
+
+| Model | Behavior |
+|-------|----------|
+| `strong` | Guarantees that reads reflect the latest committed write. May increase latency. |
+| `eventual` | Allows reads to return slightly stale data in exchange for lower latency and higher availability. |
+
+Specify consistency per-operation in the `options` object or as a query parameter on GET requests.
+
+## Concurrency control with ETags
+
+When you read a value, Dapr returns an `ETag` response header. Supply that ETag in a subsequent write to ensure your update is based on the version you read.
+
+<Steps>
+  <Step title="Read the value and capture the ETag">
+    ```bash
+    curl -i http://localhost:3500/v1.0/state/statestore/cart-user42
+    # Response header: Etag: "3"
+    ```
+  </Step>
+  <Step title="Write with the ETag for optimistic locking">
+    ```bash
+    curl -X POST http://localhost:3500/v1.0/state/statestore \
+      -H "Content-Type: application/json" \
+      -d '[{"key": "cart-user42", "value": {"items": []}, "etag": "3", "options": {"concurrency": "first-write"}}]'
+    ```
+  </Step>
+  <Step title="Handle a conflict">
+    If another writer modified the key between your read and write, the sidecar returns `409 Conflict`. Re-read the current value and retry.
+  </Step>
+</Steps>
+
+## State store components
+
+Configure a state store by creating a component YAML. Place it in your components directory (default: `~/.dapr/components/`).
+
+<Tabs>
+  <Tab title="Redis">
+    ```yaml
+    apiVersion: dapr.io/v1alpha1
+    kind: Component
+    metadata:
+      name: statestore
+    spec:
+      type: state.redis
+      version: v1
+      metadata:
+        - name: redisHost
+          value: "localhost:6379"
+        - name: redisPassword
+          value: ""
+        - name: actorStateStore
+          value: "true"
+    ```
+  </Tab>
+  <Tab title="PostgreSQL">
+    ```yaml
+    apiVersion: dapr.io/v1alpha1
+    kind: Component
+    metadata:
+      name: statestore
+    spec:
+      type: state.postgresql
+      version: v1
+      metadata:
+        - name: connectionString
+          value: "host=localhost user=postgres password=postgres dbname=dapr_state port=5432 sslmode=disable"
+    ```
+  </Tab>
+  <Tab title="Azure CosmosDB">
+    ```yaml
+    apiVersion: dapr.io/v1alpha1
+    kind: Component
+    metadata:
+      name: statestore
+    spec:
+      type: state.azure.cosmosdb
+      version: v1
+      metadata:
+        - name: url
+          value: "https://<account>.documents.azure.com:443/"
+        - name: masterKey
+          secretKeyRef:
+            name: cosmosdb-secret
+            key: masterKey
+        - name: database
+          value: "daprdb"
+        - name: collection
+          value: "state"
+    ```
+  </Tab>
+  <Tab title="AWS DynamoDB">
+    ```yaml
+    apiVersion: dapr.io/v1alpha1
+    kind: Component
+    metadata:
+      name: statestore
+    spec:
+      type: state.aws.dynamodb
+      version: v1
+      metadata:
+        - name: table
+          value: "dapr-state"
+        - name: region
+          value: "us-east-1"
+        - name: accessKey
+          secretKeyRef:
+            name: aws-secret
+            key: accessKey
+        - name: secretKey
+          secretKeyRef:
+            name: aws-secret
+            key: secretKey
+    ```
+  </Tab>
+</Tabs>
+
+## Example: shopping cart with Redis
+
+This example saves and retrieves a shopping cart stored under the user's ID.
+
+<CodeGroup>
+
+```python cart.py
+import requests
+import json
+
+DAPR_PORT = 3500
+STORE = "statestore"
+USER_ID = "user42"
+
+def save_cart(items: list):
+    resp = requests.post(
+        f"http://localhost:{DAPR_PORT}/v1.0/state/{STORE}",
+        json=[{"key": f"cart-{USER_ID}", "value": {"items": items}}],
+    )
+    resp.raise_for_status()
+
+def get_cart() -> dict:
+    resp = requests.get(
+        f"http://localhost:{DAPR_PORT}/v1.0/state/{STORE}/cart-{USER_ID}"
+    )
+    if resp.status_code == 204:
+        return {"items": []}
+    resp.raise_for_status()
+    return resp.json()
+
+save_cart([{"sku": "widget", "qty": 2}, {"sku": "gadget", "qty": 1}])
+print(get_cart())
+```
+
+```go cart.go
+package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "fmt"
+    "io"
+    "net/http"
+)
+
+const (
+    daprPort = "3500"
+    store    = "statestore"
+    userID   = "user42"
+)
+
+type CartItem struct {
+    SKU string `json:"sku"`
+    Qty int    `json:"qty"`
+}
+
+type Cart struct {
+    Items []CartItem `json:"items"`
+}
+
+func saveCart(items []CartItem) error {
+    payload := []map[string]any{
+        {"key": "cart-" + userID, "value": Cart{Items: items}},
+    }
+    body, _ := json.Marshal(payload)
+    resp, err := http.Post(
+        fmt.Sprintf("http://localhost:%s/v1.0/state/%s", daprPort, store),
+        "application/json",
+        bytes.NewReader(body),
+    )
+    if err != nil {
+        return err
+    }
+    defer resp.Body.Close()
+    return nil
+}
+
+func getCart() (*Cart, error) {
+    resp, err := http.Get(
+        fmt.Sprintf("http://localhost:%s/v1.0/state/%s/cart-%s", daprPort, store, userID),
+    )
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode == http.StatusNoContent {
+        return &Cart{}, nil
+    }
+
+    data, _ := io.ReadAll(resp.Body)
+    var cart Cart
+    json.Unmarshal(data, &cart)
+    return &cart, nil
+}
+
+func main() {
+    saveCart([]CartItem{{SKU: "widget", Qty: 2}, {SKU: "gadget", Qty: 1}})
+    cart, _ := getCart()
+    fmt.Printf("Cart: %+v\n", cart)
+}
+```
+
+</CodeGroup>
+
+## Transactional example: checkout and clear cart
+
+```bash
+curl -X POST http://localhost:3500/v1.0/state/statestore/transaction \
+  -H "Content-Type: application/json" \
+  -d '{
+    "operations": [
+      {
+        "operation": "upsert",
+        "request": {
+          "key": "order-user42-001",
+          "value": {
+            "status": "confirmed",
+            "items": [{"sku": "widget", "qty": 2}]
+          }
+        }
+      },
+      {
+        "operation": "delete",
+        "request": {
+          "key": "cart-user42"
+        }
+      }
+    ]
+  }'
+```
+
+<Tip>
+  For applications that need per-user or per-tenant isolation, set the `keyPrefix` metadata on the component to `none` and manage key namespacing yourself, or rely on Dapr's default app-ID prefix.
+</Tip>

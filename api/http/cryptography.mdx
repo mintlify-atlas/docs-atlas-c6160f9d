@@ -1,0 +1,285 @@
+---
+title: "Cryptography API"
+description: "Encrypt and decrypt data streams using Dapr crypto components. Use subtle crypto endpoints for low-level key operations."
+---
+
+The Cryptography API provides two layers of cryptographic operations:
+
+- **High-level crypto** (`/v1.0-alpha1/crypto/...`) — stream-based encryption and decryption with automatic key wrapping. Designed for encrypting arbitrary-length data.
+- **Subtle crypto** (`/v1.0-alpha1/subtlecrypto/...`) — low-level primitives for key retrieval, encrypt/decrypt, key wrap/unwrap, sign, and verify. Suitable for smaller payloads where you need fine-grained control.
+
+<Warning>
+  All Cryptography API endpoints are currently in **alpha** (`v1.0-alpha1`). The request format and behavior may change in future releases.
+</Warning>
+
+## Endpoints
+
+### High-level crypto
+
+| Method | Path | Version | Description |
+|---|---|---|---|
+| `PUT` | `/v1.0-alpha1/crypto/{name}/encrypt` | v1.0-alpha1 | Encrypt a data stream. |
+| `PUT` | `/v1.0-alpha1/crypto/{name}/decrypt` | v1.0-alpha1 | Decrypt a data stream. |
+
+### Subtle crypto
+
+| Method | Path | Version | Description |
+|---|---|---|---|
+| `POST` | `/v1.0-alpha1/subtlecrypto/{name}/getkey` | v1.0-alpha1 | Retrieve a public key or key metadata. |
+| `POST` | `/v1.0-alpha1/subtlecrypto/{name}/encrypt` | v1.0-alpha1 | Encrypt a small payload. |
+| `POST` | `/v1.0-alpha1/subtlecrypto/{name}/decrypt` | v1.0-alpha1 | Decrypt a small payload. |
+| `POST` | `/v1.0-alpha1/subtlecrypto/{name}/wrapkey` | v1.0-alpha1 | Wrap (encrypt) a key with another key. |
+| `POST` | `/v1.0-alpha1/subtlecrypto/{name}/unwrapkey` | v1.0-alpha1 | Unwrap (decrypt) a wrapped key. |
+| `POST` | `/v1.0-alpha1/subtlecrypto/{name}/sign` | v1.0-alpha1 | Sign a digest. |
+| `POST` | `/v1.0-alpha1/subtlecrypto/{name}/verify` | v1.0-alpha1 | Verify a signature. |
+
+---
+
+## High-level crypto
+
+The high-level endpoints handle arbitrary-length data streams. The request body is the raw data to encrypt or decrypt; the response body is the processed output.
+
+### Common path parameter
+
+<ParamField path="name" type="string" required>
+  Name of the crypto component as declared in your Dapr component YAML.
+</ParamField>
+
+---
+
+### Encrypt
+
+```
+PUT http://localhost:3500/v1.0-alpha1/crypto/{name}/encrypt
+```
+
+Encrypts the request body using the specified key. The response body is the encrypted ciphertext in Dapr's encryption format (which includes key metadata needed for decryption).
+
+### Request headers
+
+<ParamField header="dapr-key-name" type="string" required>
+  The name of the key in the crypto component to use for wrapping the data encryption key.
+</ParamField>
+
+<ParamField header="dapr-key-wrap-algorithm" type="string" required>
+  The key wrap algorithm. Common values: `RSA-OAEP`, `RSA-OAEP-256`, `A256KW`, `A128KW`. Must be compatible with the key type.
+</ParamField>
+
+<ParamField header="dapr-omit-decryption-key-name" type="boolean">
+  If `true`, the key name is not embedded in the ciphertext envelope. The caller must supply the key name when decrypting. Default: `false`.
+</ParamField>
+
+<ParamField header="dapr-decryption-key-name" type="string">
+  The key name to embed in the ciphertext envelope for use during decryption. Defaults to the value of `dapr-key-name`.
+</ParamField>
+
+<ParamField header="dapr-data-encryption-cipher" type="string">
+  The cipher used for data encryption. Values: `AES-GCM` (default), `ChaCha20-Poly1305`.
+</ParamField>
+
+### Request body
+
+Raw bytes to encrypt (any content type).
+
+### Response
+
+- `Content-Type: application/octet-stream`
+- Body: encrypted bytes in Dapr's proprietary envelope format.
+
+### Example
+
+```bash
+curl -X PUT http://localhost:3500/v1.0-alpha1/crypto/myazurevault/encrypt \
+  -H "dapr-key-name: my-rsa-key" \
+  -H "dapr-key-wrap-algorithm: RSA-OAEP-256" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @plaintext.bin \
+  --output encrypted.bin
+```
+
+---
+
+### Decrypt
+
+```
+PUT http://localhost:3500/v1.0-alpha1/crypto/{name}/decrypt
+```
+
+Decrypts a Dapr-encrypted ciphertext. The key name is read from the ciphertext envelope unless `dapr-key-name` is provided explicitly.
+
+### Request headers
+
+<ParamField header="dapr-key-name" type="string">
+  Override the key name for decryption. Use this when the ciphertext envelope was created with `dapr-omit-decryption-key-name: true`.
+</ParamField>
+
+### Request body
+
+Encrypted bytes previously produced by the encrypt endpoint.
+
+### Response
+
+- `Content-Type: application/octet-stream`
+- Body: the original plaintext bytes.
+
+### Example
+
+```bash
+curl -X PUT http://localhost:3500/v1.0-alpha1/crypto/myazurevault/decrypt \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @encrypted.bin \
+  --output decrypted.bin
+```
+
+---
+
+## Subtle crypto
+
+Subtle crypto endpoints accept and return JSON. They operate on base64-encoded data and are intended for smaller payloads (keys, digests, tokens).
+
+### Common path parameter
+
+<ParamField path="name" type="string" required>
+  Name of the crypto component.
+</ParamField>
+
+---
+
+### Get key
+
+```
+POST http://localhost:3500/v1.0-alpha1/subtlecrypto/{name}/getkey
+```
+
+Retrieves the public key or key metadata for a named key.
+
+```json
+{
+  "name": "my-ec-key"
+}
+```
+
+---
+
+### Subtle encrypt
+
+```
+POST http://localhost:3500/v1.0-alpha1/subtlecrypto/{name}/encrypt
+```
+
+Encrypts a small base64-encoded plaintext payload.
+
+```json
+{
+  "keyName": "my-aes-key",
+  "algorithm": "A256GCM",
+  "plaintext": "SGVsbG8gV29ybGQ=",
+  "nonce": "dGVzdG5vbmNl"
+}
+```
+
+---
+
+### Subtle decrypt
+
+```
+POST http://localhost:3500/v1.0-alpha1/subtlecrypto/{name}/decrypt
+```
+
+Decrypts a base64-encoded ciphertext payload.
+
+```json
+{
+  "keyName": "my-aes-key",
+  "algorithm": "A256GCM",
+  "ciphertext": "<base64-encoded ciphertext>",
+  "nonce": "dGVzdG5vbmNl",
+  "tag": "<base64-encoded auth tag>"
+}
+```
+
+---
+
+### Wrap key
+
+```
+POST http://localhost:3500/v1.0-alpha1/subtlecrypto/{name}/wrapkey
+```
+
+Wraps (encrypts) a symmetric key using a wrapping key stored in the crypto component.
+
+```json
+{
+  "keyName": "my-rsa-key",
+  "algorithm": "RSA-OAEP-256",
+  "plaintextKey": "<base64-encoded key bytes>",
+  "nonce": "dGVzdG5vbmNl"
+}
+```
+
+---
+
+### Unwrap key
+
+```
+POST http://localhost:3500/v1.0-alpha1/subtlecrypto/{name}/unwrapkey
+```
+
+Unwraps (decrypts) a wrapped key.
+
+```json
+{
+  "keyName": "my-rsa-key",
+  "algorithm": "RSA-OAEP-256",
+  "wrappedKey": "<base64-encoded wrapped key>",
+  "nonce": "dGVzdG5vbmNl"
+}
+```
+
+---
+
+### Sign
+
+```
+POST http://localhost:3500/v1.0-alpha1/subtlecrypto/{name}/sign
+```
+
+Signs a base64-encoded digest using the specified private key.
+
+```json
+{
+  "keyName": "my-ec-signing-key",
+  "algorithm": "ES256",
+  "digest": "<base64-encoded SHA-256 digest>"
+}
+```
+
+---
+
+### Verify
+
+```
+POST http://localhost:3500/v1.0-alpha1/subtlecrypto/{name}/verify
+```
+
+Verifies a signature against a digest.
+
+```json
+{
+  "keyName": "my-ec-signing-key",
+  "algorithm": "ES256",
+  "digest": "<base64-encoded SHA-256 digest>",
+  "signature": "<base64-encoded signature>"
+}
+```
+
+---
+
+## Error codes
+
+| Status | Description |
+|---|---|
+| `200` | Operation succeeded. |
+| `400` | Missing required header or invalid algorithm/key combination. |
+| `404` | Crypto component not found or key not found in component. |
+| `500` | Cryptographic operation failed (key error, algorithm mismatch, corrupted ciphertext). |

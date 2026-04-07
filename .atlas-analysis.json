@@ -1,28 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Dapr",
+  "projectType": "infrastructure",
+  "projectName": "Dapr",
+  "projectDescription": "A portable, event-driven runtime that provides distributed system building blocks—pub/sub, state management, service invocation, actors, workflows, and more—as a sidecar for any language or framework.",
   "theme": "aspen",
-  "colors": {
-    "primary": "#0c2494",
-    "light": "#8996b6",
-    "dark": "#ebeef1"
-  },
-  "favicon": "https://media.brand.dev/89210f0e-536f-422b-9cc6-85d187014c30.jpg",
-  "logo": {
-    "light": "https://media.brand.dev/01837dba-7cce-49c5-bf25-4d17b4c4d712.svg",
-    "dark": "https://media.brand.dev/01837dba-7cce-49c5-bf25-4d17b4c4d712.svg"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/dapr/dapr"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/dapr/dapr"
-    }
-  },
+  "primaryColor": "#0c2494",
+  "lightColor": "#8996b6",
+  "darkColor": "#ebeef1",
   "navigation": {
     "tabs": [
       {
@@ -89,8 +72,7 @@
               "api/http/distributed-lock",
               "api/http/cryptography",
               "api/http/configuration",
-              "api/http/metadata",
-              "api/http/conversation"
+              "api/http/metadata"
             ]
           },
           {
@@ -103,5 +85,39 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Service-to-service invocation with built-in mTLS security",
+    "Pub/Sub messaging with pluggable providers and at-least-once delivery",
+    "State management with pluggable datastores and consistency models",
+    "Workflow orchestration for durable, long-running processes",
+    "Virtual actors for stateful, single-threaded execution",
+    "Input/output bindings for event-driven integrations",
+    "Secrets management integrated with cloud key vaults",
+    "Distributed lock and configuration APIs",
+    "Cryptography APIs for encryption and digital signatures",
+    "Built-in observability with OpenTelemetry tracing and metrics",
+    "Resiliency policies: circuit breakers, retries, timeouts",
+    "Sidecar model — language and framework agnostic",
+    "Native Kubernetes support via Operator and CRDs",
+    "Self-hosted mode for local development",
+    "Jobs/scheduler API for cron and one-time jobs"
+  ],
+  "publicApiSurface": [
+    "POST /v1.0/invoke/{appId}/method/{method-name}",
+    "GET/POST/PUT/DELETE /v1.0/state/{storeName}/{key}",
+    "POST /v1.0/publish/{pubsubname}/{topic}",
+    "GET /v1.0-alpha1/workflows/{workflowComponent}/{instanceID}",
+    "POST /v1.0-alpha1/workflows/{workflowComponent}/{workflowName}/start",
+    "POST /v1.0/actors/{actorType}/{actorId}/method/{method}",
+    "GET/POST /v1.0/secrets/{secretStoreName}/{key}",
+    "POST /v1.0/bindings/{name}",
+    "POST /v1.0-alpha1/lock/{storeName}",
+    "POST /v1.0-alpha1/crypto/{CryptoComponentName}/encrypt",
+    "GET /v1.0/configuration/{storeName}",
+    "GET /v1.0/metadata",
+    "POST /v1.0-alpha1/jobs/{name}",
+    "POST /v1.0-alpha1/conversation/{llm-name}/converse",
+    "dapr.proto.runtime.v1.Dapr gRPC service"
+  ]
 }

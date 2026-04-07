@@ -1,97 +1,81 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Dapr — Distributed Application Runtime"
+description: "Build portable, reliable microservices with built-in APIs for state management, pub/sub, service invocation, workflows, actors, and more."
 ---
 
-## Setting up
+Dapr is a portable, event-driven runtime that makes it easy for any developer to build resilient, stateless and stateful applications that run in cloud and edge environments. It provides a set of building blocks as HTTP and gRPC APIs, deployed as a sidecar alongside your application — no special SDKs or libraries required.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get Dapr running locally and make your first API call in minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Core Concepts" icon="book" href="/concepts">
+    Understand the sidecar model, building blocks, and how Dapr works.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Building Blocks" icon="cubes" href="/building-blocks/service-invocation">
+    Explore Dapr's APIs: state, pub/sub, workflows, actors, secrets, and more.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="API Reference" icon="code" href="/api/http/overview">
+    Full HTTP and gRPC API documentation with request/response schemas.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Why Dapr?
 
-Everything you need to create world-class documentation.
+Dapr solves the hard problems of distributed systems so you don't have to write boilerplate infrastructure code. Every building block is exposed as a standard HTTP or gRPC API — your application calls `localhost` and Dapr handles the rest.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={3}>
+  <Card title="Language agnostic" icon="language">
+    Works with any language or framework via HTTP and gRPC. No SDK required.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Pluggable components" icon="plug">
+    Swap Redis for Kafka, or Azure Blob for S3, with a single YAML change.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Production-ready" icon="shield-check">
+    Built-in mTLS, retries, circuit breakers, distributed tracing, and metrics.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+</CardGroup>
 
-## Need inspiration?
+## Building blocks
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<CardGroup cols={2}>
+  <Card title="Service invocation" icon="arrow-right-arrow-left" href="/building-blocks/service-invocation">
+    Reliable service-to-service calls with automatic service discovery, retries, and mTLS.
+  </Card>
+  <Card title="State management" icon="database" href="/building-blocks/state-management">
+    Key/value state APIs with pluggable backends: Redis, PostgreSQL, Azure CosmosDB, and more.
+  </Card>
+  <Card title="Pub/Sub messaging" icon="tower-broadcast" href="/building-blocks/pub-sub">
+    Event-driven messaging with at-least-once delivery across Kafka, RabbitMQ, Azure Service Bus, and more.
+  </Card>
+  <Card title="Workflows" icon="diagram-project" href="/building-blocks/workflows">
+    Durable, long-running workflow orchestration built on top of the actor model.
+  </Card>
+  <Card title="Actors" icon="user-gear" href="/building-blocks/actors">
+    Virtual actor pattern for stateful, single-threaded, turn-based execution.
+  </Card>
+  <Card title="Bindings" icon="link" href="/building-blocks/bindings">
+    Input/output bindings to trigger your app from external systems or call external services.
+  </Card>
+  <Card title="Secrets" icon="key" href="/building-blocks/secrets">
+    Retrieve secrets from Azure Key Vault, AWS Secrets Manager, HashiCorp Vault, and more.
+  </Card>
+  <Card title="Cryptography" icon="lock" href="/building-blocks/cryptography">
+    Encrypt, decrypt, sign, and verify data using keys stored in external key management systems.
+  </Card>
+</CardGroup>
+
+## Deploy anywhere
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes" icon="dharmachakra" href="/operations/kubernetes">
+    Run Dapr on Kubernetes with the Dapr Operator, injector, and CRDs.
+  </Card>
+  <Card title="Self-hosted" icon="server" href="/operations/self-hosted">
+    Run Dapr as a process or container on any machine for local development.
+  </Card>
+</CardGroup>
+
+<Note>
+  Dapr is a graduated [CNCF](https://cncf.io) project trusted in production by hundreds of organizations worldwide.
+</Note>

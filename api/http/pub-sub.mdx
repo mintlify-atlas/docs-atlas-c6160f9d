@@ -1,0 +1,235 @@
+---
+title: "Pub/Sub API"
+description: "Publish messages to topics and receive CloudEvent-formatted messages via Dapr pub/sub subscriptions."
+---
+
+The Pub/Sub API lets your application publish messages to topics and receive them as HTTP callbacks. Dapr handles routing, retries, and dead-lettering via configured pub/sub broker components.
+
+## Endpoints
+
+| Method | Path | Version | Description |
+|---|---|---|---|
+| `POST` `PUT` | `/v1.0/publish/{pubsubname}/{topic}` | v1.0 | Publish a message to a topic. |
+| `POST` `PUT` | `/v1.0/publish/bulk/{pubsubname}/{topic}` | v1.0 | Bulk publish multiple messages. |
+| `POST` `PUT` | `/v1.0-alpha1/publish/bulk/{pubsubname}/{topic}` | v1.0-alpha1 | Bulk publish (alpha). |
+
+---
+
+## Publish a message
+
+```
+POST http://localhost:3500/v1.0/publish/{pubsubname}/{topic}
+```
+
+Publishes a message to the named topic on the named pub/sub component. Dapr wraps the body in a CloudEvents 1.0 envelope automatically (unless the body is already a CloudEvent).
+
+### Path parameters
+
+<ParamField path="pubsubname" type="string" required>
+  Name of the pub/sub component as declared in your Dapr component YAML.
+</ParamField>
+
+<ParamField path="topic" type="string" required>
+  Name of the topic to publish to. Supports hierarchical topic names using `/` (e.g., `orders/created`).
+</ParamField>
+
+### Query parameters
+
+<ParamField query="metadata.ttlInSeconds" type="integer">
+  Time-to-live for the message in seconds. After this time elapses, the broker may discard the message.
+</ParamField>
+
+<ParamField query="metadata.rawPayload" type="boolean">
+  If `true`, the body is sent without a CloudEvents envelope. Default: `false`.
+</ParamField>
+
+<ParamField query="metadata.*" type="string">
+  Additional component-specific metadata as query parameters with the `metadata.` prefix.
+</ParamField>
+
+### Request headers
+
+| Header | Description |
+|---|---|
+| `Content-Type` | Preserved as the `datacontenttype` in the CloudEvents envelope. Use `application/json` for JSON data. |
+
+### Request body
+
+Any JSON value or raw bytes. Dapr wraps this in a CloudEvents envelope.
+
+```json
+{
+  "orderId": "1001",
+  "item": "widget",
+  "quantity": 10
+}
+```
+
+### Response
+
+`204 No Content` on success. No response body.
+
+### Example
+
+```bash
+# Publish with default settings
+curl -X POST http://localhost:3500/v1.0/publish/mypubsub/orders \
+  -H "Content-Type: application/json" \
+  -d '{"orderId": "1001", "item": "widget"}'
+
+# Publish with a 2-minute TTL
+curl -X POST "http://localhost:3500/v1.0/publish/mypubsub/orders?metadata.ttlInSeconds=120" \
+  -H "Content-Type: application/json" \
+  -d '{"orderId": "1001"}'
+```
+
+### Error codes
+
+| Status | Description |
+|---|---|
+| `204` | Message published successfully. |
+| `400` | Missing pub/sub name, topic, or malformed body. |
+| `403` | Publishing to this topic is not allowed by the access control policy. |
+| `404` | The pub/sub component is not found or not configured. |
+| `500` | Broker error — message could not be published. |
+
+---
+
+## Bulk publish
+
+```
+POST http://localhost:3500/v1.0/publish/bulk/{pubsubname}/{topic}
+```
+
+Publishes multiple messages in a single request. Available in both `v1.0` and `v1.0-alpha1`.
+
+### Path parameters
+
+<ParamField path="pubsubname" type="string" required>
+  Name of the pub/sub component.
+</ParamField>
+
+<ParamField path="topic" type="string" required>
+  Name of the topic to publish to.
+</ParamField>
+
+### Request body
+
+Array of message entry objects.
+
+<ParamField body="entryId" type="string" required>
+  A unique identifier for this entry within the request. Used to correlate failures in the response.
+</ParamField>
+
+<ParamField body="event" type="any" required>
+  The message payload.
+</ParamField>
+
+<ParamField body="contentType" type="string">
+  Content type of the event (e.g., `application/json`).
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  Per-message metadata (e.g., `{"ttlInSeconds": "60"}`).
+</ParamField>
+
+```json
+[
+  {
+    "entryId": "msg-1",
+    "event": { "orderId": "1001" },
+    "contentType": "application/json"
+  },
+  {
+    "entryId": "msg-2",
+    "event": { "orderId": "1002" },
+    "contentType": "application/json",
+    "metadata": { "ttlInSeconds": "60" }
+  }
+]
+```
+
+### Response
+
+<ResponseField name="failedEntries" type="object[]">
+  Array of entries that failed to publish. Empty on full success.
+  <Expandable title="failed entry properties">
+    <ResponseField name="entryId" type="string">The `entryId` from the request.</ResponseField>
+    <ResponseField name="error" type="string">The error message for this entry.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="errorCode" type="string">
+  A high-level error code if the entire bulk operation failed.
+</ResponseField>
+
+```json
+{
+  "failedEntries": [
+    {
+      "entryId": "msg-2",
+      "error": "connection timeout"
+    }
+  ],
+  "errorCode": ""
+}
+```
+
+---
+
+## Application subscription endpoint
+
+To receive messages, your application must expose a route that Dapr can call. Dapr also expects a subscription declaration endpoint.
+
+### Declare subscriptions (`GET /dapr/subscribe`)
+
+Your application must respond to `GET /dapr/subscribe` with a list of subscription objects:
+
+```json
+[
+  {
+    "pubsubname": "mypubsub",
+    "topic": "orders",
+    "route": "/orders/handler"
+  }
+]
+```
+
+<Note>
+  Subscriptions can also be declared as Dapr component YAML files. The `GET /dapr/subscribe` approach is called "programmatic subscriptions".
+</Note>
+
+### Message delivery
+
+Dapr delivers messages to your application via `POST` to the route specified in the subscription. The body is a CloudEvents 1.0 envelope:
+
+```json
+{
+  "specversion": "1.0",
+  "type": "com.dapr.event.sent",
+  "source": "mypubsub",
+  "id": "3f9e8d3b-1234-5678-abcd-ef0123456789",
+  "time": "2024-01-15T10:30:00Z",
+  "datacontenttype": "application/json",
+  "topic": "orders",
+  "pubsubname": "mypubsub",
+  "data": {
+    "orderId": "1001",
+    "item": "widget"
+  }
+}
+```
+
+### Application response codes
+
+Your handler must return one of these status codes:
+
+| Status | Meaning | Dapr behavior |
+|---|---|---|
+| `200` | Success — message processed. | Dapr acknowledges the message to the broker. |
+| `404` | Drop — message should be discarded. | Dapr acknowledges the message (no retry) without calling dead-letter. |
+| `500` | Retry — transient error. | Dapr retries delivery with backoff. |
+
+<Warning>
+  Any status code other than `200`, `404`, or `500` (including `204`) is treated as a retry (`500` behavior) by Dapr. Always return `200` for successful processing.
+</Warning>

@@ -1,0 +1,420 @@
+---
+title: "State management API"
+description: "Get, save, delete, bulk-retrieve, transact, and query state using the Dapr state management HTTP API."
+---
+
+The state management API stores and retrieves key/value pairs via pluggable state store components (Redis, Cosmos DB, PostgreSQL, etc.). All requests are scoped to the configured state store named `{storeName}`.
+
+## Endpoints
+
+| Method | Path | Version | Description |
+|---|---|---|---|
+| `GET` | `/v1.0/state/{storeName}/{key}` | v1.0 | Get a single state value. |
+| `POST` `PUT` | `/v1.0/state/{storeName}` | v1.0 | Save one or more state values. |
+| `DELETE` | `/v1.0/state/{storeName}/{key}` | v1.0 | Delete a state value. |
+| `POST` `PUT` | `/v1.0/state/{storeName}/bulk` | v1.0 | Get multiple state values in one request. |
+| `POST` `PUT` | `/v1.0/state/{storeName}/transaction` | v1.0 | Execute multiple state operations atomically. |
+| `POST` `PUT` | `/v1.0-alpha1/state/{storeName}/query` | v1.0-alpha1 | Query state using a filter/sort/pagination expression. |
+
+---
+
+## Get state
+
+```
+GET http://localhost:3500/v1.0/state/{storeName}/{key}
+```
+
+Retrieves a single value from the state store.
+
+### Path parameters
+
+<ParamField path="storeName" type="string" required>
+  Name of the state store component as configured in the Dapr component YAML.
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  The key to retrieve.
+</ParamField>
+
+### Query parameters
+
+<ParamField query="consistency" type="string">
+  Consistency mode. Values: `strong`, `eventual`. Defaults to the component's default.
+</ParamField>
+
+<ParamField query="metadata.*" type="string">
+  Component-specific metadata key/value pairs passed as query parameters with the `metadata.` prefix (e.g., `?metadata.partitionKey=mypartition`).
+</ParamField>
+
+### Response
+
+Returns the raw value stored at the key with `200 OK`. If the key does not exist, returns `204 No Content`.
+
+The `ETag` response header is set when the state store supports ETags.
+
+```json
+"my-state-value"
+```
+
+### Example
+
+```bash
+curl http://localhost:3500/v1.0/state/mystore/order-1001
+```
+
+### Error codes
+
+| Status | Description |
+|---|---|
+| `204` | Key not found — response body is empty. |
+| `400` | Invalid key name or missing store name. |
+| `500` | State store error. |
+
+---
+
+## Save state
+
+```
+POST http://localhost:3500/v1.0/state/{storeName}
+```
+
+Saves one or more state items. Each item can include an ETag for optimistic concurrency.
+
+### Path parameters
+
+<ParamField path="storeName" type="string" required>
+  Name of the state store component.
+</ParamField>
+
+### Request body
+
+Array of state objects.
+
+<ParamField body="key" type="string" required>
+  The key for this state item.
+</ParamField>
+
+<ParamField body="value" type="any" required>
+  The value to store. Can be any JSON value (string, number, object, array).
+</ParamField>
+
+<ParamField body="etag" type="string">
+  ETag from a previous `GET` for optimistic concurrency. If the ETag does not match, the operation fails with `409 Conflict`.
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  Component-specific metadata for this item.
+</ParamField>
+
+<ParamField body="options" type="object">
+  <Expandable title="options properties">
+    <ParamField body="concurrency" type="string">
+      Concurrency mode: `first-write` (use ETag), `last-write` (overwrite). Default: `last-write`.
+    </ParamField>
+    <ParamField body="consistency" type="string">
+      Consistency mode: `strong`, `eventual`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+```json
+[
+  {
+    "key": "order-1001",
+    "value": { "item": "widget", "quantity": 10 },
+    "etag": "abc123",
+    "options": {
+      "concurrency": "first-write",
+      "consistency": "strong"
+    }
+  },
+  {
+    "key": "order-1002",
+    "value": "pending"
+  }
+]
+```
+
+### Response
+
+`204 No Content` on success. No response body.
+
+### Example
+
+```bash
+curl -X POST http://localhost:3500/v1.0/state/mystore \
+  -H "Content-Type: application/json" \
+  -d '[{"key":"order-1001","value":{"item":"widget","quantity":10}}]'
+```
+
+---
+
+## Delete state
+
+```
+DELETE http://localhost:3500/v1.0/state/{storeName}/{key}
+```
+
+Deletes a state item from the store.
+
+### Path parameters
+
+<ParamField path="storeName" type="string" required>
+  Name of the state store component.
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  The key to delete.
+</ParamField>
+
+### Query parameters
+
+<ParamField query="concurrency" type="string">
+  Concurrency mode: `first-write` (requires `If-Match` ETag header), `last-write`.
+</ParamField>
+
+<ParamField query="consistency" type="string">
+  Consistency mode: `strong`, `eventual`.
+</ParamField>
+
+### Request headers
+
+| Header | Description |
+|---|---|
+| `If-Match` | ETag value for optimistic concurrency. If present and does not match, the delete is rejected with `409`. |
+
+### Response
+
+`204 No Content` on success.
+
+### Example
+
+```bash
+curl -X DELETE http://localhost:3500/v1.0/state/mystore/order-1001 \
+  -H "If-Match: abc123"
+```
+
+---
+
+## Get bulk state
+
+```
+POST http://localhost:3500/v1.0/state/{storeName}/bulk
+```
+
+Retrieves multiple state values in a single request.
+
+### Path parameters
+
+<ParamField path="storeName" type="string" required>
+  Name of the state store component.
+</ParamField>
+
+### Request body
+
+<ParamField body="keys" type="string[]" required>
+  Array of keys to retrieve.
+</ParamField>
+
+<ParamField body="parallelism" type="integer">
+  Maximum number of concurrent fetch operations. Default: component-specific.
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  Component-specific metadata.
+</ParamField>
+
+```json
+{
+  "keys": ["order-1001", "order-1002", "order-1003"],
+  "parallelism": 10
+}
+```
+
+### Response
+
+Array of `BulkGetResponse` objects, one per requested key. Keys that are not found have a `null` data value; keys that failed have a non-empty `error` field.
+
+<ResponseField name="key" type="string">
+  The requested key.
+</ResponseField>
+
+<ResponseField name="data" type="any">
+  The value stored at the key, or `null` if the key was not found.
+</ResponseField>
+
+<ResponseField name="etag" type="string">
+  The ETag of the value, if the store supports ETags.
+</ResponseField>
+
+<ResponseField name="metadata" type="object">
+  Component-specific metadata.
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Non-empty if an error occurred fetching this specific key. Other keys in the response may still be valid.
+</ResponseField>
+
+```json
+[
+  {
+    "key": "order-1001",
+    "data": { "item": "widget", "quantity": 10 },
+    "etag": "abc123"
+  },
+  {
+    "key": "order-1002",
+    "data": "pending"
+  },
+  {
+    "key": "order-1003",
+    "error": "key not found"
+  }
+]
+```
+
+---
+
+## Execute state transaction
+
+```
+POST http://localhost:3500/v1.0/state/{storeName}/transaction
+```
+
+Executes multiple `upsert` and `delete` operations atomically. Requires a state store that supports transactions.
+
+### Path parameters
+
+<ParamField path="storeName" type="string" required>
+  Name of the state store component.
+</ParamField>
+
+### Request body
+
+<ParamField body="operations" type="object[]" required>
+  Array of transactional operations.
+  <Expandable title="operation properties">
+    <ParamField body="operation" type="string" required>
+      Operation type: `upsert` or `delete`.
+    </ParamField>
+    <ParamField body="request" type="object" required>
+      For `upsert`: `{"key": "...", "value": ..., "etag": "...", "metadata": {}}`. For `delete`: `{"key": "...", "etag": "..."}`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  Transaction-level metadata passed to the state store component.
+</ParamField>
+
+```json
+{
+  "operations": [
+    {
+      "operation": "upsert",
+      "request": {
+        "key": "order-1001",
+        "value": { "status": "shipped" }
+      }
+    },
+    {
+      "operation": "delete",
+      "request": {
+        "key": "order-1000"
+      }
+    }
+  ],
+  "metadata": {
+    "partitionKey": "customer-42"
+  }
+}
+```
+
+### Response
+
+`204 No Content` on success.
+
+### Error codes
+
+| Status | Description |
+|---|---|
+| `400` | Unsupported operation type or malformed request. |
+| `500` | Transaction failed (store error or ETag mismatch). |
+
+---
+
+## Query state <span style={{fontSize:"0.75em", color: "#6b7280"}}>(Alpha)</span>
+
+```
+POST http://localhost:3500/v1.0-alpha1/state/{storeName}/query
+```
+
+Queries state using a structured filter, sort, and pagination expression. Only supported by state stores with query support.
+
+<Warning>
+  This is an alpha API (`v1.0-alpha1`). The request format and behavior may change in future releases.
+</Warning>
+
+### Path parameters
+
+<ParamField path="storeName" type="string" required>
+  Name of the state store component.
+</ParamField>
+
+### Request body
+
+A JSON query expression. The exact schema is component-specific. A common structure:
+
+```json
+{
+  "filter": {
+    "EQ": { "status": "pending" }
+  },
+  "sort": [
+    { "key": "createdAt", "order": "DESC" }
+  ],
+  "page": {
+    "limit": 20,
+    "token": ""
+  }
+}
+```
+
+### Response
+
+<ResponseField name="results" type="object[]">
+  Array of matching items.
+  <Expandable title="item properties">
+    <ResponseField name="key" type="string">The item key.</ResponseField>
+    <ResponseField name="data" type="any">The item value.</ResponseField>
+    <ResponseField name="etag" type="string">The item ETag.</ResponseField>
+    <ResponseField name="error" type="string">Non-empty if this item had an error.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="token" type="string">
+  Pagination token. Pass this as `page.token` in the next request to retrieve the next page.
+</ResponseField>
+
+<ResponseField name="metadata" type="object">
+  Component-specific metadata.
+</ResponseField>
+
+```json
+{
+  "results": [
+    { "key": "order-1001", "data": { "status": "pending" }, "etag": "v1" },
+    { "key": "order-1005", "data": { "status": "pending" }, "etag": "v2" }
+  ],
+  "token": "eyJsYXN0a2V5IjoiMTAwNSJ9",
+  "metadata": {}
+}
+```
+
+## ETag and optimistic concurrency
+
+Dapr supports optimistic concurrency using ETags:
+
+1. Retrieve a value with `GET /v1.0/state/{storeName}/{key}` — note the `ETag` response header.
+2. On `save` or `delete`, set `"concurrency": "first-write"` in options and pass the ETag in the request (as `"etag"` field for save, or `If-Match` header for delete).
+3. If the state has changed since you read it, the operation fails with `409 Conflict`.

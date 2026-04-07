@@ -1,0 +1,313 @@
+---
+title: "Actors API"
+description: "Invoke actor methods, manage actor state, and register reminders and timers using the Dapr actors HTTP API."
+---
+
+The Actors API enables the virtual actor pattern. Dapr places actors on nodes, manages lifecycle, and routes calls to the correct instance. Your application hosts actor implementations and registers the actor types it supports.
+
+## Actor registration
+
+Your application must expose `GET /dapr/config` and return the actor types it hosts:
+
+```json
+{
+  "entities": ["OrderActor", "CartActor"],
+  "actorIdleTimeout": "1h",
+  "drainOngoingCallTimeout": "30s",
+  "drainRebalancedActors": true
+}
+```
+
+## Endpoints
+
+| Method | Path | Version | Description |
+|---|---|---|---|
+| `GET` `POST` `PUT` `DELETE` | `/v1.0/actors/{actorType}/{actorId}/method/{method}` | v1.0 | Invoke an actor method. |
+| `GET` | `/v1.0/actors/{actorType}/{actorId}/state/{key}` | v1.0 | Get a single actor state value. |
+| `POST` `PUT` | `/v1.0/actors/{actorType}/{actorId}/state` | v1.0 | Execute transactional state operations on an actor. |
+| `POST` `PUT` | `/v1.0/actors/{actorType}/{actorId}/reminders/{name}` | v1.0 | Create or update an actor reminder. |
+| `GET` | `/v1.0/actors/{actorType}/{actorId}/reminders/{name}` | v1.0 | Get an actor reminder. |
+| `DELETE` | `/v1.0/actors/{actorType}/{actorId}/reminders/{name}` | v1.0 | Delete an actor reminder. |
+| `POST` `PUT` | `/v1.0/actors/{actorType}/{actorId}/timers/{name}` | v1.0 | Create or update an actor timer. |
+| `DELETE` | `/v1.0/actors/{actorType}/{actorId}/timers/{name}` | v1.0 | Delete an actor timer. |
+
+---
+
+## Common path parameters
+
+<ParamField path="actorType" type="string" required>
+  The actor type name (e.g., `OrderActor`). Must match a type registered in `GET /dapr/config`.
+</ParamField>
+
+<ParamField path="actorId" type="string" required>
+  The unique ID of the actor instance (e.g., `order-1001`).
+</ParamField>
+
+---
+
+## Invoke actor method
+
+```
+GET/POST/PUT/DELETE http://localhost:3500/v1.0/actors/{actorType}/{actorId}/method/{method}
+```
+
+Calls a method on the specified actor. Dapr activates the actor if it is not already running and routes the call to the node hosting that actor ID.
+
+### Path parameters
+
+<ParamField path="method" type="string" required>
+  The method name to invoke on the actor (e.g., `process`, `getStatus`).
+</ParamField>
+
+### Request body
+
+Forwarded as-is to the actor method. Use `Content-Type: application/json` for JSON payloads.
+
+### Response
+
+The direct response from the actor method, including status code and body.
+
+### Example
+
+```bash
+curl -X POST http://localhost:3500/v1.0/actors/OrderActor/order-1001/method/process \
+  -H "Content-Type: application/json" \
+  -d '{"action": "ship"}'
+```
+
+### Error codes
+
+| Status | Description |
+|---|---|
+| `200` | Method invoked successfully. |
+| `500` | Actor method returned an error or the actor could not be reached. |
+
+---
+
+## Get actor state
+
+```
+GET http://localhost:3500/v1.0/actors/{actorType}/{actorId}/state/{key}
+```
+
+Retrieves a single state value for the actor.
+
+### Path parameters
+
+<ParamField path="key" type="string" required>
+  The state key to retrieve.
+</ParamField>
+
+### Response
+
+Returns the raw state value with `200 OK`. Returns `204 No Content` if the key does not exist.
+
+### Example
+
+```bash
+curl http://localhost:3500/v1.0/actors/OrderActor/order-1001/state/status
+```
+
+---
+
+## Execute actor state transaction
+
+```
+POST http://localhost:3500/v1.0/actors/{actorType}/{actorId}/state
+```
+
+Saves or deletes multiple state keys atomically for a single actor instance. This is the correct way to persist actor state — actor state is automatically scoped to the actor type and ID.
+
+### Request body
+
+Array of transactional operation objects.
+
+<ParamField body="operation" type="string" required>
+  Operation type: `upsert` or `delete`.
+</ParamField>
+
+<ParamField body="request" type="object" required>
+  For `upsert`: `{"key": "...", "value": ...}`. For `delete`: `{"key": "..."}`.
+</ParamField>
+
+```json
+[
+  {
+    "operation": "upsert",
+    "request": {
+      "key": "status",
+      "value": "shipped"
+    }
+  },
+  {
+    "operation": "upsert",
+    "request": {
+      "key": "lastUpdated",
+      "value": "2024-01-15T10:30:00Z"
+    }
+  },
+  {
+    "operation": "delete",
+    "request": {
+      "key": "tempDraft"
+    }
+  }
+]
+```
+
+### Response
+
+`204 No Content` on success.
+
+---
+
+## Reminders
+
+Reminders are **durable**, persisted callbacks that survive actor deactivation and sidecar restarts. Dapr stores reminders in the actor state store and invokes your actor when they fire.
+
+### Create or update a reminder
+
+```
+POST http://localhost:3500/v1.0/actors/{actorType}/{actorId}/reminders/{name}
+```
+
+<ParamField path="name" type="string" required>
+  A unique name for this reminder within the actor instance.
+</ParamField>
+
+<ParamField body="dueTime" type="string">
+  Time until the first reminder fires. Supports RFC3339 timestamps (absolute) or Go duration strings (relative, e.g., `15s`, `1h30m`). Default: fires immediately.
+</ParamField>
+
+<ParamField body="period" type="string">
+  How frequently the reminder repeats after the first firing (e.g., `1m`, `30s`). Omit for a one-time reminder.
+</ParamField>
+
+<ParamField body="ttl" type="string">
+  Time-to-live for the reminder. The reminder is deleted after this duration (e.g., `24h`).
+</ParamField>
+
+<ParamField body="data" type="any">
+  Arbitrary data passed to the actor when the reminder fires.
+</ParamField>
+
+```json
+{
+  "dueTime": "10s",
+  "period": "1m",
+  "ttl": "24h",
+  "data": { "action": "send-notification" }
+}
+```
+
+### Response
+
+`204 No Content` on success.
+
+### Example
+
+```bash
+curl -X POST http://localhost:3500/v1.0/actors/OrderActor/order-1001/reminders/ship-notification \
+  -H "Content-Type: application/json" \
+  -d '{"dueTime": "5m", "period": "", "data": {"action": "notify"}}'
+```
+
+### Get a reminder
+
+```
+GET http://localhost:3500/v1.0/actors/{actorType}/{actorId}/reminders/{name}
+```
+
+Returns the reminder configuration.
+
+<ResponseField name="actorType" type="string">Actor type.</ResponseField>
+<ResponseField name="actorID" type="string">Actor ID.</ResponseField>
+<ResponseField name="dueTime" type="string">When the reminder fires.</ResponseField>
+<ResponseField name="period" type="string">Repeat interval.</ResponseField>
+<ResponseField name="ttl" type="string">Time-to-live.</ResponseField>
+<ResponseField name="data" type="any">Reminder data payload.</ResponseField>
+
+```json
+{
+  "actorType": "OrderActor",
+  "actorID": "order-1001",
+  "dueTime": "5m",
+  "period": "",
+  "data": { "action": "notify" }
+}
+```
+
+### Delete a reminder
+
+```
+DELETE http://localhost:3500/v1.0/actors/{actorType}/{actorId}/reminders/{name}
+```
+
+Removes the named reminder. Returns `204 No Content`.
+
+---
+
+## Timers
+
+Timers are **transient** callbacks that are not persisted. They are cleared when the actor deactivates. Use reminders for durable scheduling.
+
+### Create or update a timer
+
+```
+POST http://localhost:3500/v1.0/actors/{actorType}/{actorId}/timers/{name}
+```
+
+<ParamField path="name" type="string" required>
+  A unique name for this timer within the actor instance.
+</ParamField>
+
+<ParamField body="dueTime" type="string">
+  Time until the timer first fires. Supports RFC3339 or duration strings.
+</ParamField>
+
+<ParamField body="period" type="string">
+  Repeat interval after the first firing.
+</ParamField>
+
+<ParamField body="ttl" type="string">
+  Time-to-live for the timer.
+</ParamField>
+
+<ParamField body="callback" type="string">
+  The method name to call on the actor when the timer fires (e.g., `"onTimerFired"`).
+</ParamField>
+
+<ParamField body="data" type="any">
+  Data passed to the callback method.
+</ParamField>
+
+```json
+{
+  "dueTime": "5s",
+  "period": "30s",
+  "callback": "onHeartbeat",
+  "data": { "tick": 1 }
+}
+```
+
+### Response
+
+`204 No Content` on success.
+
+### Delete a timer
+
+```
+DELETE http://localhost:3500/v1.0/actors/{actorType}/{actorId}/timers/{name}
+```
+
+Removes the named timer. Returns `204 No Content`.
+
+---
+
+## Reminder vs timer
+
+| Feature | Reminder | Timer |
+|---|---|---|
+| Persisted | Yes — survives deactivation and restarts | No — cleared on deactivation |
+| Fire when actor is inactive | Yes — Dapr reactivates the actor | No |
+| Use case | Durable scheduling (payments, retries) | Short-lived in-memory scheduling |

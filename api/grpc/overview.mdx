@@ -1,0 +1,235 @@
+---
+title: "gRPC API overview"
+description: "Connect to the Dapr sidecar over gRPC. Learn about the two service interfaces, how to generate client stubs, authentication, and when to prefer gRPC over HTTP."
+keywords: ["grpc", "api", "proto", "dapr runtime", "appcallback", "service invocation", "sidecar"]
+---
+
+Dapr exposes a gRPC API alongside its HTTP API. The gRPC interface is generated from Protocol Buffer definitions and provides strongly-typed, high-performance access to every Dapr building block.
+
+<CardGroup cols={2}>
+  <Card title="dapr.proto.runtime.v1.Dapr" icon="arrow-right">
+    The application-facing service. Your code calls this to invoke services, read/write state, publish events, interact with actors, run workflows, and more.
+  </Card>
+  <Card title="dapr.proto.runtime.v1.AppCallback" icon="arrow-left">
+    Dapr calls your application through this interface — for topic subscriptions, binding triggers, and actor method invocations.
+  </Card>
+</CardGroup>
+
+## Connecting to the sidecar
+
+The Dapr sidecar (`daprd`) listens on **port 50001** by default. Connect to it from your application using any gRPC client:
+
+```bash
+# Default address
+localhost:50001
+```
+
+Pass `--dapr-grpc-port` to `daprd` or the Dapr CLI to change the port:
+
+```bash
+dapr run --app-id myapp --dapr-grpc-port 50002 -- ./myapp
+```
+
+<Note>
+  Your application connects to its **own** sidecar on localhost. You do not connect directly to other applications' sidecars.
+</Note>
+
+### TLS
+
+For inter-service communication, all sidecar-to-sidecar traffic is automatically encrypted with mutual TLS managed by the Dapr sentry. Your application-to-sidecar connection on localhost does not require TLS in most deployments.
+
+## Authentication
+
+Pass your Dapr API token in the `dapr-api-token` gRPC metadata key on every call. This is required when the sidecar has token authentication enabled.
+
+<Tabs>
+  <Tab title="Go">
+    ```go
+    import "google.golang.org/grpc/metadata"
+
+    ctx := metadata.AppendToOutgoingContext(
+        context.Background(),
+        "dapr-api-token", os.Getenv("DAPR_API_TOKEN"),
+    )
+    resp, err := client.GetState(ctx, req)
+    ```
+  </Tab>
+  <Tab title="Python">
+    ```python
+    import grpc
+
+    channel = grpc.insecure_channel("localhost:50001")
+    metadata = [("dapr-api-token", os.environ["DAPR_API_TOKEN"])]
+    stub = dapr_pb2_grpc.DaprStub(channel)
+    resp = stub.GetState(req, metadata=metadata)
+    ```
+  </Tab>
+  <Tab title="Node.js">
+    ```javascript
+    const credentials = grpc.credentials.createInsecure();
+    const client = new DaprClient("localhost:50001", credentials);
+
+    const metadata = new grpc.Metadata();
+    metadata.add("dapr-api-token", process.env.DAPR_API_TOKEN);
+    client.getState(req, metadata, (err, resp) => { /* ... */ });
+    ```
+  </Tab>
+</Tabs>
+
+## Error model
+
+Dapr returns standard [gRPC status codes](https://grpc.github.io/grpc/core/md_doc_statuscodes.html). On error, the response status contains:
+
+| Code | Meaning |
+|------|---------|
+| `OK` (0) | Success |
+| `INVALID_ARGUMENT` (3) | Missing or malformed request field |
+| `NOT_FOUND` (5) | Component, key, or resource not found |
+| `INTERNAL` (13) | Unexpected sidecar error |
+| `UNIMPLEMENTED` (12) | Method disabled by API access rules |
+| `UNAUTHENTICATED` (16) | API token missing or invalid |
+
+Extended error details are embedded in the status as a `google.rpc.Status` message with a `DaprError` detail when available.
+
+## Proto package
+
+Both service interfaces live in the `dapr.proto.runtime.v1` package:
+
+```protobuf
+syntax = "proto3";
+package dapr.proto.runtime.v1;
+```
+
+Proto source files are published in the [dapr/dapr](https://github.com/dapr/dapr/tree/master/dapr/proto/runtime/v1) repository. The full set of files includes:
+
+| File | Contents |
+|------|----------|
+| `dapr.proto` | `Dapr` service definition |
+| `appcallback.proto` | `AppCallback` service definition |
+| `state.proto` | State management message types |
+| `pubsub.proto` | Pub/sub message types |
+| `binding.proto` | Binding message types |
+| `secret.proto` | Secret message types |
+| `actors.proto` | Actor message types |
+| `configuration.proto` | Configuration message types |
+| `crypto.proto` | Cryptography message types |
+| `lock.proto` | Distributed lock message types |
+| `workflow.proto` | Workflow message types |
+| `jobs.proto` | Job scheduling message types |
+| `metadata.proto` | Sidecar metadata message types |
+
+Common message types shared across building blocks are defined in `dapr.proto.common.v1` (`dapr/proto/common/v1/common.proto`).
+
+## Generating client stubs
+
+Download the proto files and use `protoc` with the appropriate language plugin to generate client code.
+
+<Steps>
+  <Step title="Clone the proto files">
+    ```bash
+    git clone --depth=1 https://github.com/dapr/dapr
+    # Proto sources are under dapr/proto/
+    ```
+  </Step>
+  <Step title="Install protoc and language plugins">
+    <Tabs>
+      <Tab title="Go">
+        ```bash
+        go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+        go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+        ```
+      </Tab>
+      <Tab title="Python">
+        ```bash
+        pip install grpcio-tools
+        ```
+      </Tab>
+      <Tab title="Node.js">
+        ```bash
+        npm install -g grpc-tools
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="Generate client code">
+    <Tabs>
+      <Tab title="Go">
+        ```bash
+        protoc \
+          --go_out=. --go_opt=paths=source_relative \
+          --go-grpc_out=. --go-grpc_opt=paths=source_relative \
+          -I dapr/proto \
+          dapr/proto/runtime/v1/dapr.proto \
+          dapr/proto/runtime/v1/appcallback.proto \
+          dapr/proto/common/v1/common.proto
+        ```
+      </Tab>
+      <Tab title="Python">
+        ```bash
+        python -m grpc_tools.protoc \
+          -I dapr/proto \
+          --python_out=. \
+          --grpc_python_out=. \
+          dapr/proto/runtime/v1/dapr.proto \
+          dapr/proto/runtime/v1/appcallback.proto \
+          dapr/proto/common/v1/common.proto
+        ```
+      </Tab>
+      <Tab title="Node.js">
+        ```bash
+        grpc_tools_node_protoc \
+          --js_out=import_style=commonjs,binary:. \
+          --grpc_out=grpc_js:. \
+          -I dapr/proto \
+          dapr/proto/runtime/v1/dapr.proto \
+          dapr/proto/runtime/v1/appcallback.proto \
+          dapr/proto/common/v1/common.proto
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+</Steps>
+
+<Tip>
+  The official [Dapr SDKs](https://docs.dapr.io/developing-applications/sdks/) bundle pre-generated stubs and a higher-level client API. Consider using an SDK if one is available for your language.
+</Tip>
+
+## gRPC vs HTTP
+
+Both APIs expose the same capabilities. Choose based on your requirements:
+
+<CardGroup cols={2}>
+  <Card title="Use gRPC when" icon="bolt">
+    - You need maximum throughput or low latency (binary framing, no JSON parsing)
+    - You want streaming — `SubscribeTopicEventsAlpha1`, `EncryptAlpha1`, `DecryptAlpha1`
+    - You want compile-time type safety from generated stubs
+    - Your application already uses gRPC internally
+  </Card>
+  <Card title="Use HTTP when" icon="globe">
+    - You want the simplest possible integration (curl, fetch, requests)
+    - Your toolchain has no protoc support
+    - You are building a browser-based client
+    - You prefer human-readable JSON payloads for debugging
+  </Card>
+</CardGroup>
+
+## API stability labels
+
+Methods are labelled by their stability tier:
+
+| Label | Meaning |
+|-------|---------|
+| (no label) | Stable — backward compatible changes only |
+| `Beta1` / `Beta2` | Beta — may change in a minor release |
+| `Alpha1` / `Alpha2` | Alpha — experimental, may change or be removed |
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Runtime proto reference" icon="code" href="/api/grpc/runtime-proto">
+    Full method signatures for the `Dapr` and `AppCallback` services.
+  </Card>
+  <Card title="HTTP API overview" icon="globe" href="/api/http/overview">
+    The equivalent HTTP API if you prefer REST.
+  </Card>
+</CardGroup>

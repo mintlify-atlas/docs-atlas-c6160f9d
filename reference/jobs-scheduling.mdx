@@ -1,0 +1,353 @@
+---
+title: "Jobs and scheduling"
+description: "Schedule one-time and recurring jobs using the Dapr Jobs API. Jobs are persisted and triggered by the Dapr Scheduler service."
+---
+
+The Jobs API lets your application schedule work to be executed at a future time or on a recurring schedule. Jobs are stored and triggered by the Dapr Scheduler service. When a job fires, the Scheduler calls back to your application via a well-known HTTP endpoint.
+
+<Info>
+  The Jobs API is currently in alpha (`v1.0-alpha1`). The API shape may change in future Dapr releases.
+</Info>
+
+## How it works
+
+<Steps>
+  <Step title="Create a job">
+    Your application calls `POST /v1.0-alpha1/jobs/{name}` with a schedule and optional payload. Dapr forwards the request to the Scheduler service, which persists the job.
+  </Step>
+  <Step title="Job fires">
+    At the scheduled time, the Scheduler service calls `POST /job/{name}` on your application's HTTP server with the job's data payload.
+  </Step>
+  <Step title="Application processes the job">
+    Your application handles the callback, processes the job data, and returns a `2xx` response to acknowledge success.
+  </Step>
+</Steps>
+
+## HTTP API
+
+### Create or update a job
+
+```
+POST /v1.0-alpha1/jobs/{name}
+```
+
+Creates a new job with the given name, or updates an existing one if `overwrite` is set to `true`. Returns `204 No Content` on success.
+
+**URL parameters**
+
+<ParamField path="name" type="string" required>
+  Unique name for the job within the application's namespace. Must not contain the `|` character.
+</ParamField>
+
+**Request body**
+
+<ParamField body="schedule" type="string">
+  Schedule expression defining when the job should run. Required unless `dueTime` is set. See [schedule formats](#schedule-formats) for supported syntax.
+</ParamField>
+
+<ParamField body="dueTime" type="string">
+  Point-in-time at which the job becomes active or, when no `schedule` is set, the exact time the job runs once. Accepts [RFC 3339](https://datatracker.ietf.org/doc/html/rfc3339) timestamps, Go duration strings (calculated from job creation time), or non-repeating ISO 8601 durations.
+
+  Examples: `"2024-01-01T10:00:00Z"`, `"30m"`, `"P1DT2H"`
+</ParamField>
+
+<ParamField body="repeats" type="number">
+  Maximum number of times the job should trigger. If omitted, the job runs until it expires or is deleted. Set to `0` to run exactly once (same as a one-shot job).
+</ParamField>
+
+<ParamField body="ttl" type="string">
+  Time after which the job expires and is automatically removed. Accepts the same formats as `dueTime`. Once expired, the job will not fire again even if it has remaining repeats.
+</ParamField>
+
+<ParamField body="data" type="object">
+  Arbitrary JSON payload delivered to your application when the job fires. The scheduler treats this as an opaque value.
+</ParamField>
+
+<ParamField body="overwrite" type="boolean" default="false">
+  When `true`, an existing job with the same name is replaced. When `false` (the default), attempting to create a job with a name that already exists returns an error.
+</ParamField>
+
+<ParamField body="failurePolicy" type="object">
+  Policy for handling job trigger failures. If omitted, failed triggers are dropped.
+
+  Set to `{"drop": {}}` to explicitly drop failed triggers, or `{"constant": {"interval": "5s", "maxRetries": 3}}` to retry at a fixed interval.
+</ParamField>
+
+**Example request**
+
+```bash
+curl -X POST http://localhost:3500/v1.0-alpha1/jobs/send-report \
+  -H "Content-Type: application/json" \
+  -d '{
+    "schedule": "@every 1h",
+    "repeats": 24,
+    "ttl": "24h",
+    "data": {
+      "reportType": "daily-summary",
+      "recipients": ["ops@example.com"]
+    }
+  }'
+```
+
+---
+
+### Get a job
+
+```
+GET /v1.0-alpha1/jobs/{name}
+```
+
+Returns the current definition of a job. Returns `200 OK` with the job object on success.
+
+<ParamField path="name" type="string" required>
+  Name of the job to retrieve.
+</ParamField>
+
+**Example response**
+
+```json
+{
+  "name": "send-report",
+  "schedule": "@every 1h",
+  "repeats": 24,
+  "ttl": "24h",
+  "data": {
+    "reportType": "daily-summary",
+    "recipients": ["ops@example.com"]
+  }
+}
+```
+
+---
+
+### Delete a job
+
+```
+DELETE /v1.0-alpha1/jobs/{name}
+```
+
+Deletes a job by name. Returns `204 No Content` on success. Has no effect if the job does not exist.
+
+<ParamField path="name" type="string" required>
+  Name of the job to delete.
+</ParamField>
+
+**Example request**
+
+```bash
+curl -X DELETE http://localhost:3500/v1.0-alpha1/jobs/send-report
+```
+
+---
+
+## Schedule formats
+
+The `schedule` field accepts two formats: cron expressions and period strings.
+
+### Cron expressions
+
+Dapr uses a **6-field** cron format with a leading seconds field:
+
+```
+seconds | minutes | hours | day of month | month        | day of week
+0-59    | 0-59    | 0-23  | 1-31         | 1-12/jan-dec | 0-6/sun-sat
+```
+
+<CodeGroup>
+
+```text every hour on the half hour
+0 30 * * * *
+```
+
+```text every day at 03:15
+0 15 3 * * *
+```
+
+```text every weekday at 9am
+0 0 9 * * 1-5
+```
+
+```text first of every month at midnight
+0 0 0 1 * *
+```
+
+</CodeGroup>
+
+### Period strings
+
+Human-readable `@`-prefixed period strings are also supported:
+
+| Expression | Description | Cron equivalent |
+|------------|-------------|-----------------|
+| `@every <duration>` | Run every duration (e.g., `"@every 5m"`, `"@every 1h30m"`) | N/A |
+| `@yearly` / `@annually` | Once a year, midnight Jan 1st | `0 0 0 1 1 *` |
+| `@monthly` | Once a month, midnight on the 1st | `0 0 0 1 * *` |
+| `@weekly` | Once a week, midnight Sunday | `0 0 0 * * 0` |
+| `@daily` / `@midnight` | Once a day, midnight | `0 0 0 * * *` |
+| `@hourly` | Once an hour, at the top of the hour | `0 0 * * * *` |
+
+---
+
+## Receiving job callbacks
+
+When a job fires, Dapr calls your application at:
+
+```
+POST /job/{name}
+```
+
+The request body contains the `data` payload that was set when the job was created. Your application must return a `2xx` HTTP status code to acknowledge success.
+
+**Example callback handler (Go)**
+
+```go
+http.HandleFunc("/job/send-report", func(w http.ResponseWriter, r *http.Request) {
+    var payload map[string]interface{}
+    json.NewDecoder(r.Body).Decode(&payload)
+
+    // Process the job
+    fmt.Printf("Sending report: %v\n", payload)
+
+    w.WriteHeader(http.StatusOK)
+})
+```
+
+**Example callback handler (Python)**
+
+```python
+@app.route('/job/send-report', methods=['POST'])
+def handle_send_report():
+    payload = request.get_json()
+    # Process the job
+    print(f"Sending report: {payload}")
+    return '', 200
+```
+
+<Warning>
+  If your application returns a non-`2xx` status code or does not respond within the timeout, the job trigger is treated as failed. Whether Dapr retries the trigger depends on the `failurePolicy` set when the job was created.
+</Warning>
+
+---
+
+## Failure policies
+
+The `failurePolicy` field controls what happens when a job trigger fails (your application returns an error or is unavailable).
+
+### Drop (default)
+
+The failed trigger tick is silently discarded. The job continues on its schedule.
+
+```json
+{
+  "schedule": "@every 5m",
+  "failurePolicy": {
+    "drop": {}
+  }
+}
+```
+
+### Constant retry
+
+Retry the trigger at a fixed interval. Optionally limit the number of retries.
+
+```json
+{
+  "schedule": "@every 5m",
+  "failurePolicy": {
+    "constant": {
+      "interval": "10s",
+      "maxRetries": 5
+    }
+  }
+}
+```
+
+<ParamField body="failurePolicy.constant.interval" type="string" required>
+  Duration to wait between retry attempts. Accepts a Go duration string (e.g., `"5s"`, `"1m"`).
+</ParamField>
+
+<ParamField body="failurePolicy.constant.maxRetries" type="number">
+  Maximum number of retry attempts before giving up on this trigger tick. If omitted, the job is retried indefinitely until it succeeds.
+</ParamField>
+
+---
+
+## Job lifecycle examples
+
+### One-time job (runs once at a specific time)
+
+```json
+{
+  "dueTime": "2024-06-01T09:00:00Z",
+  "data": {
+    "action": "send-quarterly-report"
+  }
+}
+```
+
+### Recurring job with a limited number of runs
+
+```json
+{
+  "schedule": "@every 10m",
+  "repeats": 6,
+  "data": {
+    "action": "poll-external-api"
+  }
+}
+```
+
+This job fires every 10 minutes, up to 6 times (one hour total).
+
+### Delayed recurring job
+
+Start a recurring schedule 30 minutes from now:
+
+```json
+{
+  "dueTime": "30m",
+  "schedule": "@hourly",
+  "data": {
+    "action": "sync-data"
+  }
+}
+```
+
+### Job with expiry
+
+Run every 5 minutes, but stop after 1 hour regardless of `repeats`:
+
+```json
+{
+  "schedule": "@every 5m",
+  "ttl": "1h",
+  "data": {
+    "action": "health-check"
+  }
+}
+```
+
+---
+
+## Scheduler service
+
+The Dapr Scheduler service is a dedicated control plane component responsible for persisting job definitions and dispatching trigger callbacks. It runs alongside the other Dapr control plane services.
+
+<CardGroup cols={2}>
+  <Card title="Job persistence" icon="hard-drive">
+    The Scheduler stores jobs durably. Jobs survive sidecar and application restarts.
+  </Card>
+  <Card title="Namespaced isolation" icon="shield">
+    Jobs are scoped to the combination of app ID and namespace. One application cannot access another application's jobs.
+  </Card>
+  <Card title="At-least-once delivery" icon="rotate">
+    When a job fires, the Scheduler attempts delivery and retries according to the configured failure policy.
+  </Card>
+  <Card title="30-second RPC timeout" icon="clock">
+    Calls from the sidecar to the Scheduler use a 30-second timeout. Ensure the Scheduler is reachable from your sidecar pods.
+  </Card>
+</CardGroup>
+
+<Note>
+  Jobs are automatically namespaced by app ID and Kubernetes namespace. You do not need to include your app ID in the job name — Dapr handles the scoping internally.
+</Note>

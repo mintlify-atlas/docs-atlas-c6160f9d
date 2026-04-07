@@ -1,0 +1,305 @@
+---
+title: "Cryptography"
+description: "Encrypt and decrypt data using keys managed in external KMS providers, without handling key material in your application."
+keywords: ["cryptography", "encryption", "decryption", "KMS", "Azure Key Vault", "AES-GCM", "RSA-OAEP", "secrets"]
+---
+
+The cryptography building block lets your application encrypt and decrypt data using keys stored in an external Key Management Service (KMS). Your application never handles raw key material — Dapr performs cryptographic operations through the KMS on your behalf.
+
+<Warning>
+  The cryptography API is currently in **alpha** (`v1.0-alpha1`). The API surface may change in future releases.
+</Warning>
+
+<CardGroup cols={2}>
+  <Card title="Keys stay in KMS" icon="key">
+    Encryption keys never leave the KMS. Your application only sees ciphertext and plaintext.
+  </Card>
+  <Card title="Streaming support" icon="arrow-right">
+    Encrypt and decrypt large payloads without loading the entire file into memory.
+  </Card>
+  <Card title="Multiple algorithms" icon="shield-halved">
+    AES-GCM for symmetric encryption, RSA-OAEP for key wrapping and asymmetric operations.
+  </Card>
+  <Card title="Local dev support" icon="laptop">
+    Use the local file component during development without needing a cloud KMS.
+  </Card>
+</CardGroup>
+
+## Two levels of API
+
+Dapr provides two cryptography APIs:
+
+<Tabs>
+  <Tab title="High-level (recommended)">
+    **Encrypt and decrypt entire payloads.** Dapr handles key wrapping, IV/nonce generation, and authenticated encryption automatically. Use this for encrypting files, PII, or any blob of data.
+
+    - `PUT /v1.0-alpha1/crypto/{componentName}/encrypt`
+    - `PUT /v1.0-alpha1/crypto/{componentName}/decrypt`
+  </Tab>
+  <Tab title="Subtle crypto (advanced)">
+    **Individual cryptographic operations.** Use when you need fine-grained control: sign, verify, wrap a key, or perform raw encryption. These map directly to the underlying KMS primitives.
+
+    - Encrypt / Decrypt
+    - Sign / Verify
+    - WrapKey / UnwrapKey
+  </Tab>
+</Tabs>
+
+## High-level API
+
+### Encrypt
+
+```bash
+PUT /v1.0-alpha1/crypto/{componentName}/encrypt
+```
+
+Pass the plaintext as the request body. Dapr returns the encrypted payload as `application/octet-stream`.
+
+**Required headers:**
+
+| Header | Description |
+|--------|-------------|
+| `dapr-key-name` | The name of the key in the KMS to use for encryption. |
+| `dapr-key-wrap-algorithm` | The key wrap algorithm. Common values: `A256KW`, `RSA-OAEP-256`. |
+
+**Optional headers:**
+
+| Header | Description |
+|--------|-------------|
+| `dapr-data-encryption-cipher` | Symmetric cipher for the data. Defaults to `AES-GCM`. Options: `AES-GCM`, `ChaCha20-Poly1305`. |
+| `dapr-omit-decryption-key-name` | Set to `true` to exclude the key name from the ciphertext envelope. |
+| `dapr-decryption-key-name` | Override the key name stored in the ciphertext envelope (for rotation scenarios). |
+
+```bash
+curl -X PUT http://localhost:3500/v1.0-alpha1/crypto/my-kms/encrypt \
+  -H "dapr-key-name: my-encryption-key" \
+  -H "dapr-key-wrap-algorithm: A256KW" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @plaintext.bin \
+  -o ciphertext.bin
+```
+
+### Decrypt
+
+```bash
+PUT /v1.0-alpha1/crypto/{componentName}/decrypt
+```
+
+Pass the encrypted payload (produced by the encrypt endpoint) as the request body. Dapr returns the plaintext as `application/octet-stream`.
+
+The key name is read from the ciphertext envelope automatically unless `dapr-omit-decryption-key-name` was set during encryption, in which case you must provide `dapr-key-name`.
+
+```bash
+curl -X PUT http://localhost:3500/v1.0-alpha1/crypto/my-kms/decrypt \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @ciphertext.bin \
+  -o decrypted.bin
+```
+
+<ParamField path="componentName" type="string" required>
+  The name of the configured cryptography component.
+</ParamField>
+
+## Streaming encryption
+
+Both the encrypt and decrypt endpoints stream data. You can pipe large files directly without loading them into memory:
+
+```bash
+# Encrypt a large video file
+curl -X PUT http://localhost:3500/v1.0-alpha1/crypto/my-kms/encrypt \
+  -H "dapr-key-name: media-key" \
+  -H "dapr-key-wrap-algorithm: A256KW" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @large-video.mp4 \
+  -o large-video.enc
+
+# Decrypt it back
+curl -X PUT http://localhost:3500/v1.0-alpha1/crypto/my-kms/decrypt \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @large-video.enc \
+  -o large-video-decrypted.mp4
+```
+
+<Tip>
+  For files larger than a few MB, use the streaming APIs via an HTTP client that supports chunked transfer encoding rather than buffering in memory.
+</Tip>
+
+## Supported KMS providers
+
+<CardGroup cols={2}>
+  <Card title="Azure Key Vault" icon="microsoft">
+    HSM-backed keys with RBAC access control. Supports RSA and EC keys.
+  </Card>
+  <Card title="AWS KMS" icon="aws">
+    Amazon managed keys with IAM policies. Supports symmetric and asymmetric keys.
+  </Card>
+  <Card title="Local file" icon="file">
+    JSON file with PEM-encoded keys. Use only for local development and testing.
+  </Card>
+</CardGroup>
+
+## Component configuration
+
+### Azure Key Vault
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: my-kms
+  namespace: default
+spec:
+  type: crypto.azure.keyvault
+  version: v1
+  metadata:
+    - name: vaultName
+      value: "my-vault"
+    - name: azureTenantId
+      value: "YOUR_TENANT_ID"
+    - name: azureClientId
+      value: "YOUR_CLIENT_ID"
+    - name: azureClientSecret
+      secretKeyRef:
+        name: azure-sp-secret
+        key: secret
+```
+
+### Local file (development only)
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: local-crypto
+  namespace: default
+spec:
+  type: crypto.dapr.localstorage
+  version: v1
+  metadata:
+    - name: path
+      value: "./keys"
+```
+
+Generate a local key for development:
+
+```bash
+# Generate an AES-256 key as a JSON Web Key
+dapr crypto local generate --algorithm AES --bits 256 --output ./keys/my-key.json
+```
+
+## Algorithms
+
+| Algorithm | Type | Use case |
+|-----------|------|----------|
+| `A256KW` | Key wrap | Wrap a 256-bit AES data encryption key with an AES key. |
+| `A128KW` | Key wrap | Same as above with 128-bit key. |
+| `RSA-OAEP-256` | Key wrap | Wrap a data encryption key with an RSA public key. |
+| `AES-GCM` | Data encryption | Default cipher for payload encryption. Authenticated. |
+| `ChaCha20-Poly1305` | Data encryption | Alternative to AES-GCM, often faster on devices without AES hardware. |
+
+## Example: encrypt user PII before storing in state
+
+Encrypt sensitive fields before persisting them to a state store so that the state store never holds plaintext PII.
+
+<Steps>
+  <Step title="Configure the KMS component">
+    ```yaml
+    apiVersion: dapr.io/v1alpha1
+    kind: Component
+    metadata:
+      name: user-kms
+    spec:
+      type: crypto.azure.keyvault
+      version: v1
+      metadata:
+        - name: vaultName
+          value: "my-vault"
+        - name: azureTenantId
+          value: "YOUR_TENANT_ID"
+        - name: azureClientId
+          value: "YOUR_CLIENT_ID"
+        - name: azureClientSecret
+          secretKeyRef:
+            name: azure-sp-secret
+            key: secret
+    ```
+  </Step>
+
+  <Step title="Encrypt the PII field">
+    ```python
+    import requests
+    import base64
+
+    DAPR_URL = "http://localhost:3500"
+
+    def encrypt_pii(plaintext: str) -> str:
+        """Encrypt a string and return a base64-encoded ciphertext."""
+        response = requests.put(
+            f"{DAPR_URL}/v1.0-alpha1/crypto/user-kms/encrypt",
+            headers={
+                "dapr-key-name": "user-pii-key",
+                "dapr-key-wrap-algorithm": "A256KW",
+                "Content-Type": "application/octet-stream",
+            },
+            data=plaintext.encode("utf-8"),
+        )
+        response.raise_for_status()
+        return base64.b64encode(response.content).decode("utf-8")
+
+    # Encrypt the user's email before storing
+    encrypted_email = encrypt_pii("user@example.com")
+    ```
+  </Step>
+
+  <Step title="Save to state store">
+    ```python
+    def save_user(user_id: str, email: str, name: str):
+        encrypted_email = encrypt_pii(email)
+
+        requests.post(
+            f"{DAPR_URL}/v1.0/state/my-statestore",
+            json=[{
+                "key": f"user-{user_id}",
+                "value": {
+                    "name": name,                     # plaintext
+                    "email": encrypted_email,         # encrypted
+                }
+            }]
+        ).raise_for_status()
+    ```
+  </Step>
+
+  <Step title="Decrypt when reading">
+    ```python
+    def decrypt_pii(ciphertext_b64: str) -> str:
+        """Decrypt a base64-encoded ciphertext and return the plaintext string."""
+        ciphertext = base64.b64decode(ciphertext_b64)
+        response = requests.put(
+            f"{DAPR_URL}/v1.0-alpha1/crypto/user-kms/decrypt",
+            headers={"Content-Type": "application/octet-stream"},
+            data=ciphertext,
+        )
+        response.raise_for_status()
+        return response.content.decode("utf-8")
+
+    def get_user(user_id: str) -> dict:
+        resp = requests.get(
+            f"{DAPR_URL}/v1.0/state/my-statestore/user-{user_id}"
+        )
+        resp.raise_for_status()
+        user = resp.json()
+        user["email"] = decrypt_pii(user["email"])
+        return user
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  The encrypted envelope produced by Dapr's high-level API embeds the key name and algorithm metadata, so decryption does not require you to track which key was used — unless you set `dapr-omit-decryption-key-name: true` during encryption.
+</Note>
+
+## Related
+
+- [Secrets management](/building-blocks/secrets)
+- [State management](/building-blocks/state-management)
+- [Cryptography API reference](/api/http/cryptography)

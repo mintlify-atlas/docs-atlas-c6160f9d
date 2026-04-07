@@ -1,0 +1,376 @@
+---
+title: "Components reference"
+description: "Dapr components are pluggable backend implementations defined in YAML. They provide state stores, pub/sub brokers, secret stores, bindings, and more."
+---
+
+Components are the pluggable backend implementations that power Dapr building blocks. Each component is described by a YAML manifest that specifies the type, version, and configuration metadata. Dapr loads component manifests at startup and makes them available to your application through the building block APIs.
+
+<CardGroup cols={2}>
+  <Card title="State stores" icon="database">
+    Persist and retrieve key/value state using Redis, PostgreSQL, Cosmos DB, MongoDB, and more.
+  </Card>
+  <Card title="Pub/sub brokers" icon="arrow-right-arrow-left">
+    Publish and subscribe to messages using Redis Streams, Kafka, Azure Service Bus, RabbitMQ, and more.
+  </Card>
+  <Card title="Secret stores" icon="lock">
+    Retrieve secrets from Azure Key Vault, HashiCorp Vault, AWS Secrets Manager, and other providers.
+  </Card>
+  <Card title="Bindings" icon="plug">
+    Trigger application code or invoke external systems using input/output bindings for Kafka, HTTP, cron, SMTP, and more.
+  </Card>
+  <Card title="Name resolution" icon="magnifying-glass">
+    Discover services using mDNS (self-hosted) or Kubernetes DNS.
+  </Card>
+  <Card title="Cryptography" icon="key">
+    Perform cryptographic operations backed by Azure Key Vault or other providers.
+  </Card>
+  <Card title="Distributed lock" icon="shield">
+    Acquire and release distributed locks using Redis.
+  </Card>
+  <Card title="Middleware" icon="filter">
+    Apply HTTP middleware (OAuth2, rate limiting, etc.) via the pipeline configuration.
+  </Card>
+</CardGroup>
+
+## Component manifest structure
+
+Every component is declared using a standard Kubernetes-style manifest:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+  namespace: default
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: localhost:6379
+    - name: redisPassword
+      secretKeyRef:
+        name: redis-secret
+        key: redis-password
+```
+
+### Manifest fields
+
+| Field | Description |
+|-------|-------------|
+| `metadata.name` | Unique identifier for this component. Your application code references this name when calling the Dapr API. |
+| `metadata.namespace` | Kubernetes namespace (Kubernetes mode only). |
+| `spec.type` | Component type string (e.g., `state.redis`). Determines which implementation is loaded. |
+| `spec.version` | Component version. Use `v1` unless the component documentation specifies otherwise. |
+| `spec.metadata` | List of name/value pairs passed to the component implementation. Values can be inline strings or references to Kubernetes secrets. |
+
+## Loading components
+
+<Tabs>
+  <Tab title="Kubernetes">
+    Apply the manifest with `kubectl`:
+
+    ```bash
+    kubectl apply -f statestore.yaml
+    ```
+
+    Dapr watches for `Component` resources in the cluster. New or updated manifests are picked up automatically when hot-reloading is enabled.
+  </Tab>
+  <Tab title="Self-hosted">
+    Place component YAML files in the default components directory, or specify a directory with the `--components-path` flag:
+
+    ```bash
+    dapr run --app-id my-app --components-path ./components -- ./myapp
+    ```
+
+    The default directory is `~/.dapr/components` (Linux/macOS) or `%USERPROFILE%\.dapr\components` (Windows).
+  </Tab>
+</Tabs>
+
+## Component categories
+
+### State stores
+
+State stores provide persistent key/value storage for the State Management building block.
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: redis-master:6379
+    - name: redisPassword
+      secretKeyRef:
+        name: redis-secret
+        key: password
+    - name: actorStateStore
+      value: "true"
+```
+
+| Type string | Backend |
+|-------------|---------|
+| `state.redis` | Redis |
+| `state.postgresql` | PostgreSQL |
+| `state.azure.cosmosdb` | Azure Cosmos DB |
+| `state.mongodb` | MongoDB |
+
+<Tip>
+  Set `actorStateStore: "true"` in the metadata to designate a state store for actor state. Only one state store should be marked as the actor state store per application.
+</Tip>
+
+---
+
+### Pub/sub brokers
+
+Pub/sub components power the Publish and Subscribe building block.
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: pubsub
+spec:
+  type: pubsub.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: redis-master:6379
+    - name: redisPassword
+      secretKeyRef:
+        name: redis-secret
+        key: password
+```
+
+| Type string | Backend |
+|-------------|---------|
+| `pubsub.redis` | Redis Streams |
+| `pubsub.kafka` | Apache Kafka |
+| `pubsub.azure.servicebus.topics` | Azure Service Bus (Topics) |
+| `pubsub.rabbitmq` | RabbitMQ |
+
+---
+
+### Secret stores
+
+Secret store components provide the Secret Management building block. They also allow other component metadata fields to reference secrets by name instead of embedding values in plaintext.
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: vault
+spec:
+  type: secretstores.hashicorp.vault
+  version: v1
+  metadata:
+    - name: vaultAddr
+      value: http://vault:8200
+    - name: vaultToken
+      value: my-root-token
+```
+
+| Type string | Backend |
+|-------------|---------|
+| `secretstores.azure.keyvault` | Azure Key Vault |
+| `secretstores.hashicorp.vault` | HashiCorp Vault |
+| `secretstores.aws.secretmanager` | AWS Secrets Manager |
+
+---
+
+### Bindings
+
+Input bindings trigger your application when an external event occurs. Output bindings let your application invoke external systems without tight coupling.
+
+<CodeGroup>
+
+```yaml input binding
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: cron-trigger
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - name: schedule
+      value: "@every 5m"
+```
+
+```yaml output binding
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: email-sender
+spec:
+  type: bindings.smtp
+  version: v1
+  metadata:
+    - name: host
+      value: smtp.example.com
+    - name: port
+      value: "587"
+    - name: user
+      value: noreply@example.com
+    - name: password
+      secretKeyRef:
+        name: smtp-secret
+        key: password
+    - name: skipTLSVerify
+      value: "false"
+```
+
+</CodeGroup>
+
+| Type string | Description |
+|-------------|-------------|
+| `bindings.kafka` | Kafka input/output |
+| `bindings.http` | HTTP output binding |
+| `bindings.cron` | Cron-based input trigger |
+| `bindings.smtp` | SMTP email output |
+
+---
+
+### Name resolution
+
+Name resolution components control how Dapr discovers other services by app ID.
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: mdns
+spec:
+  type: nameresolution.mdns
+  version: v1
+```
+
+| Type string | Use case |
+|-------------|----------|
+| `nameresolution.mdns` | Self-hosted, single-host development |
+| `nameresolution.kubernetes` | Kubernetes in-cluster DNS |
+
+---
+
+### Cryptography
+
+Cryptography components back the Cryptography building block, enabling encrypt, decrypt, sign, and verify operations without exposing raw key material to your application.
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: myvault
+spec:
+  type: crypto.azure.keyvault
+  version: v1
+  metadata:
+    - name: vaultUri
+      value: https://myvault.vault.azure.net
+```
+
+| Type string | Backend |
+|-------------|---------|
+| `crypto.azure.keyvault` | Azure Key Vault |
+
+---
+
+### Distributed lock
+
+Distributed lock components back the Distributed Lock building block, enabling mutually exclusive access to shared resources.
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: redislock
+spec:
+  type: lock.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: redis:6379
+    - name: redisPassword
+      secretKeyRef:
+        name: redis-secret
+        key: password
+```
+
+| Type string | Backend |
+|-------------|---------|
+| `lock.redis` | Redis |
+
+---
+
+## Using secrets in metadata
+
+Component metadata values can reference Kubernetes secrets (or a configured secret store) instead of embedding credentials in the component manifest:
+
+```yaml
+metadata:
+  - name: connectionString
+    secretKeyRef:
+      name: my-k8s-secret    # Name of the Kubernetes Secret object
+      key: connection-string  # Key within the Secret
+```
+
+<Info>
+  In self-hosted mode, `secretKeyRef` resolves secrets from a configured secret store component rather than from Kubernetes. The secret store used for component secret resolution is set by the `--secret-store` flag or automatically inferred from the environment.
+</Info>
+
+## Scoping components to specific apps
+
+By default, all sidecars in the namespace can use any component. Use the `scopes` field to restrict a component to specific application IDs:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: redis:6379
+scopes:
+  - checkout-service
+  - order-service
+```
+
+Only sidecars with `dapr.io/app-id` matching an entry in `scopes` will load this component. All other applications will behave as if the component does not exist.
+
+## Hot-reloading components
+
+Enable the `HotReload` feature flag in your `Configuration` to allow Dapr to pick up component changes without restarting the sidecar:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: my-config
+spec:
+  features:
+    - name: HotReload
+      enabled: true
+```
+
+With hot-reload enabled, updating or applying a `Component` manifest triggers a live reload on all sidecars that have loaded the component. This is useful for rotating credentials or updating configuration without incurring downtime.
+
+<Warning>
+  Not all component types support live reloading. Check the individual component documentation for compatibility. State stores and pub/sub brokers with active subscriptions may experience brief interruptions during a reload.
+</Warning>
+
+## Component versioning
+
+Every component type has a preferred stable version (`v1`) and may have deprecated older versions. When no version is specified, Dapr defaults to the first stable version. Using a deprecated version logs a warning at startup:
+
+```
+WARNING: state store mystore/v0 is deprecated and will be removed in a future version, please use mystore/v1
+```
+
+Always use the latest stable version (`v1`) unless you have a specific compatibility requirement.

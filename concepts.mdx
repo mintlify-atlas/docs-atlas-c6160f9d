@@ -1,0 +1,401 @@
+---
+title: "Core concepts"
+description: "Understand the foundational concepts behind Dapr: the sidecar pattern, building blocks, components, app IDs, namespaces, resiliency, security, and observability."
+keywords: ["dapr", "concepts", "sidecar", "building blocks", "components", "mtls", "resiliency", "observability", "app id", "namespaces"]
+---
+
+This page explains the mental models and architectural decisions behind Dapr. Reading it before diving into specific building blocks will make the rest of the documentation easier to follow.
+
+## The sidecar pattern
+
+Dapr runs as a separate process — `daprd` — alongside each application instance. This is the sidecar pattern: one lightweight companion process per application workload.
+
+```
+Application process    Dapr sidecar (daprd)
+─────────────────      ──────────────────────────────────────────────
+Your app               HTTP server on :3500 (configurable)
+  │                    gRPC server on :50001 (configurable)
+  │  localhost          │
+  └─────────────────────┘
+                        │
+                   External world
+                 (state stores, brokers,
+                  other sidecars, secret vaults)
+```
+
+The sidecar communicates with your app over the loopback interface. Your app never calls external infrastructure directly — it calls its own sidecar on `localhost`, and the sidecar translates that call to whichever backend component is configured. This decoupling gives you:
+
+- **Portability.** Swap backends without touching application code.
+- **Language independence.** Any language that can make an HTTP or gRPC call works.
+- **Centralized policy.** Retries, circuit breakers, mTLS, and tracing are enforced at the sidecar level, not scattered across application codebases.
+
+<Info>
+  In Kubernetes, `daprd` is injected as a sidecar container by the Dapr Injector mutating admission webhook. In self-hosted mode, `dapr run` launches `daprd` as a child process alongside your app.
+</Info>
+
+### Ports and protocols
+
+| Protocol | Default port | Purpose |
+|----------|-------------|---------|
+| HTTP | 3500 | Building block APIs (`/v1.0/...`, `/v1.0-alpha1/...`) |
+| gRPC | 50001 | Building block APIs (protobuf) |
+| Internal gRPC | 50002 | Dapr-to-Dapr sidecar communication |
+| Metrics | 9090 | Prometheus scrape endpoint |
+
+All ports are configurable via `daprd` flags (`--dapr-http-port`, `--dapr-grpc-port`, etc.) or the `dapr run` CLI wrapper.
+
+## Building blocks
+
+A **building block** is a named group of Dapr API endpoints that solves a specific distributed systems problem. Each building block is versioned independently using the endpoint group version constants defined in the runtime:
+
+| Version constant | URL prefix | Stability |
+|------------------|------------|-----------|
+| `v1` | `/v1.0/` | Stable |
+| `v1alpha1` | `/v1.0-alpha1/` | Alpha |
+| `v1alpha2` | `/v1.0-alpha2/` | Alpha |
+| `v1beta1` | `/v1.0-beta1/` | Beta |
+
+The following building blocks are registered in the Dapr HTTP server:
+
+| Building block | Endpoint group | Stable path prefix |
+|---------------|---------------|--------------------|
+| Service invocation | `invoke` | `/v1.0/invoke/` |
+| State management | `state` | `/v1.0/state/` |
+| Pub/Sub | `publish` | `/v1.0/publish/` |
+| Bindings | `bindings` | `/v1.0/bindings/` |
+| Secrets | `secrets` | `/v1.0/secrets/` |
+| Actors | `actors` | `/v1.0/actors/` |
+| Configuration | `configuration` | `/v1.0/configuration/` |
+| Distributed lock | `lock` / `unlock` | `/v1.0/lock/`, `/v1.0/unlock/` |
+| Cryptography | `crypto` | `/v1.0/crypto/` |
+| Workflows | `workflows` | `/v1.0-beta1/workflows/` |
+| Jobs | `jobs` | `/v1.0-alpha1/jobs/` |
+| Conversation | `conversation` | `/v1.0-alpha1/conversation/` |
+
+Your application is never coupled to the underlying infrastructure. It always calls its local sidecar on `localhost`. The sidecar resolves the correct backend component at runtime.
+
+## Components
+
+A **component** is the pluggable backend implementation of a building block. Components are defined as YAML files and loaded by the sidecar at startup.
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+  namespace: production
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: "redis-master:6379"
+    - name: actorStateStore
+      value: "true"
+```
+
+The `spec.type` field selects the component implementation (e.g., `state.redis`, `state.postgresql`, `pubsub.kafka`). The `metadata` block passes configuration to that implementation. Switching from Redis to PostgreSQL means changing `spec.type` and its `metadata` — your application source code does not change.
+
+Component types by category:
+
+<CardGroup cols={2}>
+  <Card title="State stores" icon="database">
+    Redis, PostgreSQL, MySQL, Azure CosmosDB, Azure Table Storage, AWS DynamoDB, GCP Firestore, MongoDB, CockroachDB, and more.
+  </Card>
+  <Card title="Message brokers" icon="tower-broadcast">
+    Apache Kafka, RabbitMQ, NATS JetStream, Azure Service Bus, AWS SNS/SQS, GCP Pub/Sub, Redis Streams, and more.
+  </Card>
+  <Card title="Secret stores" icon="key">
+    HashiCorp Vault, Azure Key Vault, AWS Secrets Manager, GCP Secret Manager, Kubernetes Secrets, and local environment variables.
+  </Card>
+  <Card title="Name resolution" icon="magnifying-glass">
+    mDNS (self-hosted default), Kubernetes DNS, HashiCorp Consul, and custom implementations.
+  </Card>
+  <Card title="Bindings" icon="link">
+    AWS S3, Azure Blob, GCP Storage, Twilio SMS, SMTP, HTTP endpoints, Cron, Kafka, and dozens more.
+  </Card>
+  <Card title="Cryptography" icon="shield-halved">
+    Azure Key Vault, Kubernetes Secrets-backed, and local file-based key stores for encryption and signing operations.
+  </Card>
+</CardGroup>
+
+<Tip>
+  All community-maintained component implementations live in the [`dapr/components-contrib`](https://github.com/dapr/components-contrib) repository. Components are loaded into `daprd` at runtime — no recompilation required.
+</Tip>
+
+### Hot reload
+
+When the `HotReload` feature flag is enabled in the Dapr `Configuration` resource, components can be added, updated, and removed at runtime without restarting the sidecar.
+
+```yaml
+# Configuration CRD with HotReload enabled
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: myconfig
+spec:
+  features:
+    - name: HotReload
+      enabled: true
+```
+
+## App IDs and service discovery
+
+Every Dapr-enabled application has an **app ID** — a logical name set at startup with `--app-id`. App IDs drive service discovery for service invocation and actor placement.
+
+```bash
+# Self-hosted
+dapr run --app-id order-processor --app-port 8080 -- node server.js
+
+# Kubernetes (annotation on Pod)
+# dapr.io/app-id: "order-processor"
+```
+
+To invoke `order-processor` from another service, call:
+
+```
+GET http://localhost:3500/v1.0/invoke/order-processor/method/orders
+```
+
+Dapr resolves `order-processor` to an address using the configured name resolution component:
+
+- **Self-hosted**: mDNS broadcasts the app ID on the local network.
+- **Kubernetes**: Dapr uses Kubernetes DNS (`<appId>-dapr.<namespace>.svc.cluster.local`).
+- **HashiCorp Consul**: Registers the app ID as a Consul service.
+
+App IDs must be unique within a namespace.
+
+## Namespaces and scoping
+
+In Kubernetes mode, Dapr components are namespace-scoped by default. A component in namespace `production` is not visible to a sidecar in namespace `staging`.
+
+You can also restrict which app IDs can access a component using the `scopes` field:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+  namespace: production
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: "redis:6379"
+scopes:
+  - checkout
+  - order-processor
+```
+
+Only the `checkout` and `order-processor` apps can use this component. All others receive a `403 Forbidden` when they try to access it.
+
+<Warning>
+  In self-hosted mode, all components in the components directory are loaded by all running sidecars. Use `scopes` to restrict access even in development environments.
+</Warning>
+
+## Resiliency policies
+
+Dapr applies resiliency policies between the sidecar and your application, between two sidecars, and between the sidecar and backend components. Policies are defined in a `Resiliency` CRD (Kubernetes) or YAML file (self-hosted).
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: myresiliency
+spec:
+  policies:
+    retries:
+      retryForever:
+        policy: exponential
+        maxInterval: 15s
+        maxRetries: -1   # -1 means retry indefinitely
+    circuitBreakers:
+      simpleCB:
+        maxRequests: 1
+        interval: 10s
+        timeout: 30s
+        trip: consecutiveFailures >= 5
+    timeouts:
+      general: 5s
+  targets:
+    apps:
+      order-processor:
+        timeout: general
+        retry: retryForever
+        circuitBreaker: simpleCB
+    components:
+      statestore:
+        outbound:
+          timeout: general
+          retry: retryForever
+```
+
+The three policy types are:
+
+| Policy | What it does |
+|--------|-------------|
+| **Retries** | Re-attempt failed operations. Supports `constant` and `exponential` backoff, configurable `maxRetries` and `maxInterval`. |
+| **Circuit breakers** | Stop sending requests after a threshold of consecutive failures. Trips open for `timeout` seconds, then half-opens to probe recovery. |
+| **Timeouts** | Cancel an operation if it has not completed within the specified duration. |
+
+Policies are referenced by name in `targets`, which can be individual app IDs, component names, or the special `actors` target.
+
+## Security
+
+### mTLS between sidecars
+
+All Dapr-to-Dapr communication (service invocation, actor calls, pub/sub forwarding) is encrypted with mutual TLS by default on Kubernetes. The Dapr Sentry service acts as a certificate authority, issuing short-lived workload certificates to each sidecar.
+
+```yaml
+# mtls configuration in the Configuration CRD
+spec:
+  mtls:
+    enabled: true
+    workloadCertTTL: 24h
+    allowedClockSkew: 15m
+    controlPlaneTrustDomain: "cluster.local"
+```
+
+Certificates are automatically rotated before expiry. You can inspect the current mTLS state with:
+
+```bash
+dapr mtls status -k
+```
+
+<Note>
+  In self-hosted mode, mTLS is disabled by default. Enable it by pointing sidecars at a Sentry instance and setting `--enable-mtls`.
+</Note>
+
+### Token authentication
+
+Your application can require callers to present an API token when calling it through the Dapr sidecar. Set the `APP_API_TOKEN` environment variable, and Dapr will reject inbound requests that do not carry the matching `dapr-api-token` header.
+
+Similarly, you can protect the Dapr sidecar's own HTTP/gRPC API from your application by setting the `DAPR_API_TOKEN` environment variable.
+
+### Access control lists
+
+Access control lists (ACLs) let you specify which services are allowed to invoke which operations on your application, using the `accessControl` section of the `Configuration` resource:
+
+```yaml
+spec:
+  accessControl:
+    defaultAction: deny
+    trustDomain: "public"
+    policies:
+      - appId: checkout
+        defaultAction: allow
+        trustDomain: "public"
+        namespace: "production"
+        operations:
+          - name: /orders
+            httpVerb: ["POST", "GET"]
+            action: allow
+```
+
+## Observability
+
+Dapr emits telemetry automatically — no instrumentation code required in your application.
+
+### Distributed tracing
+
+Every API call that passes through a Dapr sidecar creates an OpenTelemetry span. Dapr uses the [W3C Trace Context](https://www.w3.org/TR/trace-context/) standard (`traceparent` and `tracestate` headers) so traces propagate end-to-end across service hops.
+
+Configure an exporter in the `Configuration` resource:
+
+```yaml
+spec:
+  tracing:
+    samplingRate: "1"   # 1 = 100% sampling; "0" disables tracing
+    otel:
+      endpointAddress: "otel-collector:4317"
+      isSecure: false
+      protocol: grpc
+```
+
+Supported exporters: OpenTelemetry Collector (OTLP/gRPC and OTLP/HTTP), Zipkin.
+
+### Metrics
+
+Dapr exposes a Prometheus-compatible metrics endpoint on port 9090 (configurable). It reports request counts, latency histograms, error rates, and component-specific metrics for every building block.
+
+```yaml
+spec:
+  metrics:
+    enabled: true
+    http:
+      increasedCardinality: false  # recommended for production
+```
+
+Metrics are enabled by default. Scrape the `/metrics` endpoint from Prometheus or any compatible collector.
+
+### API logging
+
+Enable structured API request logging in the `Configuration` resource:
+
+```yaml
+spec:
+  logging:
+    apiLogging:
+      enabled: true
+      obfuscateURLs: true   # logs route name instead of full path (protects PII)
+      omitHealthChecks: true
+```
+
+You can also enable API logging per sidecar at startup with `--enable-api-logging`.
+
+## Configuration resource
+
+The Dapr `Configuration` resource (a Kubernetes CRD or a YAML file in self-hosted mode) is where all the above policies are wired together. A single configuration file can set tracing exporters, mTLS settings, resiliency policies, feature flags, API access rules, and secret scopes.
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: appconfig
+spec:
+  tracing:
+    samplingRate: "1"
+    otel:
+      endpointAddress: "otel-collector:4317"
+      protocol: grpc
+      isSecure: false
+  metrics:
+    enabled: true
+  mtls:
+    enabled: true
+    workloadCertTTL: 24h
+  features:
+    - name: HotReload
+      enabled: true
+  accessControl:
+    defaultAction: deny
+    trustDomain: "public"
+```
+
+Apply the configuration to a sidecar by passing its name at startup:
+
+```bash
+# Self-hosted
+dapr run --config ./config.yaml --app-id myapp -- ./myapp
+
+# Kubernetes (annotation)
+# dapr.io/config: "appconfig"
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="State management" icon="database" href="/building-blocks/state-management">
+    Explore state API options: consistency, concurrency, TTLs, and transactions.
+  </Card>
+  <Card title="Service invocation" icon="arrow-right-arrow-left" href="/building-blocks/service-invocation">
+    Learn how Dapr routes requests between services and handles retries.
+  </Card>
+  <Card title="Resiliency" icon="shield-check" href="/operations/resiliency">
+    Configure retries, circuit breakers, and timeouts for production workloads.
+  </Card>
+  <Card title="Security" icon="lock" href="/operations/security">
+    Deep dive into mTLS, certificate rotation, and access control lists.
+  </Card>
+</CardGroup>

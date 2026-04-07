@@ -1,0 +1,192 @@
+---
+title: "Distributed lock API"
+description: "Acquire and release distributed locks using Dapr lock store components to coordinate exclusive access to shared resources."
+---
+
+The Distributed Lock API provides mutual exclusion across multiple application instances. Locks are backed by a configurable lock store component (Redis, ZooKeeper, etc.) and have a mandatory expiry time to prevent deadlocks from crashed processes.
+
+<Warning>
+  The Distributed Lock API is currently in **alpha** (`v1.0-alpha1`). The request/response format may change in future releases. Do not rely on this API in production workloads without accepting that risk.
+</Warning>
+
+## Endpoints
+
+| Method | Path | Version | Description |
+|---|---|---|---|
+| `POST` | `/v1.0-alpha1/lock/{storeName}` | v1.0-alpha1 | Attempt to acquire a lock. |
+| `POST` | `/v1.0-alpha1/unlock/{storeName}` | v1.0-alpha1 | Release a previously acquired lock. |
+
+---
+
+## Acquire lock
+
+```
+POST http://localhost:3500/v1.0-alpha1/lock/{storeName}
+```
+
+Attempts to acquire an exclusive lock on a resource. Returns immediately with the result — this is a **non-blocking try-lock**, not a blocking wait.
+
+### Path parameters
+
+<ParamField path="storeName" type="string" required>
+  Name of the lock store component as declared in your Dapr component YAML.
+</ParamField>
+
+### Request body
+
+<ParamField body="resourceId" type="string" required>
+  The identifier for the resource being locked. All processes contending for the same resource must use the same `resourceId`.
+</ParamField>
+
+<ParamField body="lockOwner" type="string" required>
+  A unique identifier for the lock holder. Used when releasing the lock. This should be unique per application instance and operation (e.g., a UUID generated per request).
+</ParamField>
+
+<ParamField body="expiryInSeconds" type="integer" required>
+  How long (in seconds) the lock should be held before it automatically expires. Must be greater than 0. Choose a value long enough for your operation to complete, but short enough to avoid long hold times if the holder crashes.
+</ParamField>
+
+```json
+{
+  "resourceId": "order-1001",
+  "lockOwner": "a7f3d2c1-9b4e-4f8a-b3c2-d1e0f2a3b4c5",
+  "expiryInSeconds": 60
+}
+```
+
+### Response
+
+<ResponseField name="status" type="integer">
+  Lock acquisition status code:
+  - `1` — Lock acquired successfully (`Success`).
+  - `2` — Lock already held by another owner (`LockExists`).
+  - `3` — An error occurred (`InternalError`).
+</ResponseField>
+
+```json
+{ "status": 1 }
+```
+
+### Example
+
+```bash
+curl -X POST http://localhost:3500/v1.0-alpha1/lock/redislock \
+  -H "Content-Type: application/json" \
+  -d '{
+    "resourceId": "order-1001",
+    "lockOwner": "a7f3d2c1-9b4e-4f8a-b3c2-d1e0f2a3b4c5",
+    "expiryInSeconds": 60
+  }'
+```
+
+Successful response:
+```json
+{ "status": 1 }
+```
+
+Lock already held:
+```json
+{ "status": 2 }
+```
+
+### Error codes
+
+| Status | Description |
+|---|---|
+| `200` | Request processed — check the `status` field in the response body to determine if the lock was acquired. |
+| `400` | Missing required fields or invalid parameters. |
+| `500` | Lock store component error. |
+
+<Note>
+  A `200 OK` response does **not** mean the lock was acquired. Always inspect the `status` field. A `status` of `2` means the lock is held by another owner.
+</Note>
+
+---
+
+## Release lock
+
+```
+POST http://localhost:3500/v1.0-alpha1/unlock/{storeName}
+```
+
+Releases a previously acquired lock. Only the lock owner that acquired the lock can release it.
+
+### Path parameters
+
+<ParamField path="storeName" type="string" required>
+  Name of the lock store component.
+</ParamField>
+
+### Request body
+
+<ParamField body="resourceId" type="string" required>
+  The resource ID of the lock to release. Must match the `resourceId` used when acquiring.
+</ParamField>
+
+<ParamField body="lockOwner" type="string" required>
+  The lock owner identifier used when acquiring the lock. Must match exactly.
+</ParamField>
+
+```json
+{
+  "resourceId": "order-1001",
+  "lockOwner": "a7f3d2c1-9b4e-4f8a-b3c2-d1e0f2a3b4c5"
+}
+```
+
+### Response
+
+<ResponseField name="status" type="integer">
+  Unlock status code:
+  - `1` — Lock released successfully (`Success`).
+  - `2` — Lock owner did not match — lock was not released (`LockOwnerMismatch`).
+  - `3` — Lock does not exist (may have already expired) (`LockDoesNotExist`).
+  - `4` — An error occurred (`InternalError`).
+</ResponseField>
+
+```json
+{ "status": 1 }
+```
+
+### Example
+
+```bash
+curl -X POST http://localhost:3500/v1.0-alpha1/unlock/redislock \
+  -H "Content-Type: application/json" \
+  -d '{
+    "resourceId": "order-1001",
+    "lockOwner": "a7f3d2c1-9b4e-4f8a-b3c2-d1e0f2a3b4c5"
+  }'
+```
+
+---
+
+## Usage pattern
+
+```bash
+# 1. Generate a unique owner ID for this operation
+OWNER_ID=$(uuidgen)
+
+# 2. Acquire the lock
+RESULT=$(curl -s -X POST http://localhost:3500/v1.0-alpha1/lock/redislock \
+  -H "Content-Type: application/json" \
+  -d "{\"resourceId\":\"my-resource\",\"lockOwner\":\"$OWNER_ID\",\"expiryInSeconds\":30}")
+
+STATUS=$(echo $RESULT | jq .status)
+
+if [ "$STATUS" = "1" ]; then
+  echo "Lock acquired, performing operation..."
+  # ... do your critical section work ...
+
+  # 3. Release the lock
+  curl -s -X POST http://localhost:3500/v1.0-alpha1/unlock/redislock \
+    -H "Content-Type: application/json" \
+    -d "{\"resourceId\":\"my-resource\",\"lockOwner\":\"$OWNER_ID\"}"
+else
+  echo "Could not acquire lock (status: $STATUS)"
+fi
+```
+
+<Tip>
+  Always release the lock as soon as your critical section completes. Even though locks expire automatically, holding them longer than necessary reduces concurrency.
+</Tip>

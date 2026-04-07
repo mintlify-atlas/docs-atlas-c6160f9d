@@ -1,0 +1,142 @@
+---
+title: "Conversation API"
+description: "Send prompts to large language models through the Dapr Conversation API, with built-in PII scrubbing."
+---
+
+The Conversation API lets your application send prompts to large language models (LLMs) through a unified, component-backed interface. Dapr handles the connection to the underlying AI provider (OpenAI, Mistral, etc.) and optionally scrubs personally identifiable information (PII) before sending.
+
+<Warning>
+  The Conversation API is currently in **alpha**. The API shape may change between releases.
+</Warning>
+
+## Endpoints
+
+| Method | Path | Version | Description |
+|---|---|---|---|
+| `POST` | `/v1.0-alpha1/conversation/{name}/converse` | v1.0-alpha1 | Send a conversation prompt (v1 request shape). |
+| `POST` | `/v1.0-alpha2/conversation/{name}/converse` | v1.0-alpha2 | Send a conversation prompt (v2 request shape). |
+
+## Converse — v1.0-alpha1
+
+```
+POST http://localhost:3500/v1.0-alpha1/conversation/{name}/converse
+```
+
+Sends one or more input messages to the named conversation component and returns the LLM's response.
+
+<ParamField path="name" type="string" required>
+  The name of the Dapr conversation component to use (as declared in your component YAML).
+</ParamField>
+
+### Request body
+
+```json
+{
+  "inputs": [
+    {
+      "content": "What is the capital of France?",
+      "role": "user"
+    }
+  ],
+  "parameters": {},
+  "metadata": {},
+  "scrubPII": false,
+  "temperature": 0.7,
+  "contextID": "optional-session-id"
+}
+```
+
+<ParamField body="inputs" type="array" required>
+  Array of conversation input messages to send to the model.
+  <Expandable title="inputs item properties">
+    <ParamField body="content" type="string" required>
+      The text content of the message.
+    </ParamField>
+    <ParamField body="role" type="string">
+      The role of the message sender. Accepted values: `user`, `human`, `system`, `assistant`, `ai`, `tool`, `function`, `generic`. Defaults to `user`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="contextID" type="string">
+  An optional session or conversation ID used to maintain context across multiple requests.
+</ParamField>
+
+<ParamField body="parameters" type="object">
+  Component-specific parameters passed to the underlying LLM provider.
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  Arbitrary key/value metadata forwarded to the component.
+</ParamField>
+
+<ParamField body="scrubPII" type="boolean">
+  When `true`, Dapr scrubs personally identifiable information from the inputs before sending them to the LLM. Default: `false`.
+</ParamField>
+
+<ParamField body="temperature" type="number">
+  Model temperature controlling response randomness. Higher values produce more varied outputs. Typical range: `0.0`–`1.0`.
+</ParamField>
+
+### Response body
+
+```json
+{
+  "outputs": [
+    {
+      "result": "Paris is the capital of France.",
+      "parameters": {}
+    }
+  ]
+}
+```
+
+<ResponseField name="outputs" type="array">
+  Array of conversation results, one per input.
+  <Expandable title="outputs item properties">
+    <ResponseField name="result" type="string">
+      The text response from the LLM.
+    </ResponseField>
+    <ResponseField name="parameters" type="object">
+      Any additional output parameters returned by the component.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example
+
+```bash
+curl -X POST http://localhost:3500/v1.0-alpha1/conversation/myopenai/converse \
+  -H "Content-Type: application/json" \
+  -d '{
+    "inputs": [
+      { "content": "Summarize this in one sentence: Dapr is a distributed application runtime.", "role": "user" }
+    ],
+    "temperature": 0.5
+  }'
+```
+
+## Component configuration
+
+Conversation components are configured with a standard Dapr component YAML. The `type` field identifies the LLM provider:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: myopenai
+spec:
+  type: conversation.openai
+  version: v1
+  metadata:
+    - name: key
+      secretKeyRef:
+        name: openai-secret
+        key: apiKey
+    - name: model
+      value: gpt-4o
+```
+
+<Note>
+  Available conversation component types depend on which providers are included in your `dapr/components-contrib` version. Check the [components reference](/reference/components) for supported backends.
+</Note>

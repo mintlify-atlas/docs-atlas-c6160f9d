@@ -1,0 +1,223 @@
+---
+title: "Running on Kubernetes"
+description: "Install Dapr on Kubernetes using Helm, configure sidecar injection, deploy components, and manage upgrades."
+keywords: ["dapr", "kubernetes", "helm", "sidecar injector", "dapr-system", "annotations", "CRD", "kubectl"]
+---
+
+Dapr on Kubernetes installs a set of system services into a dedicated `dapr-system` namespace. The sidecar injector automatically adds `daprd` to any pod annotated with `dapr.io/enabled: "true"`, so your application deployments stay clean and Dapr-free in code.
+
+## Prerequisites
+
+- A Kubernetes cluster (v1.22+)
+- `kubectl` configured for the target cluster
+- [Helm 3](https://helm.sh/docs/intro/install/)
+
+## Install Dapr with Helm
+
+<Steps>
+  <Step title="Add the Dapr Helm repository">
+    ```bash
+    helm repo add dapr https://dapr.github.io/helm-charts/
+    helm repo update
+    ```
+  </Step>
+  <Step title="Install the Dapr control plane">
+    ```bash
+    helm install dapr dapr/dapr \
+      --namespace dapr-system \
+      --create-namespace \
+      --wait
+    ```
+
+    This installs all Dapr control plane services: `dapr-operator`, `dapr-sidecar-injector`, `dapr-placement`, `dapr-sentry`, and `dapr-scheduler`.
+  </Step>
+  <Step title="Verify the installation">
+    ```bash
+    kubectl get pods -n dapr-system
+    ```
+
+    All pods should reach `Running` status:
+
+    ```
+    NAME                                     READY   STATUS    RESTARTS   AGE
+    dapr-operator-7d6c9b8c7-x9fg2            1/1     Running   0          60s
+    dapr-placement-server-0                  1/1     Running   0          60s
+    dapr-sentry-74c6d6c9d4-r9kwn             1/1     Running   0          60s
+    dapr-sidecar-injector-5cf8d6fbbf-nwrsp   1/1     Running   0          60s
+    dapr-scheduler-server-0                  1/1     Running   0          60s
+    ```
+  </Step>
+</Steps>
+
+### High-availability mode
+
+For production, enable HA mode to run multiple replicas of each control plane service:
+
+```bash
+helm install dapr dapr/dapr \
+  --namespace dapr-system \
+  --create-namespace \
+  --set global.ha.enabled=true \
+  --wait
+```
+
+HA mode runs 3 replicas per service and sets a `maximumUnavailable` of 25% for pod disruption budgets.
+
+## Enable the Dapr sidecar
+
+To inject the Dapr sidecar into a pod, add annotations to your Kubernetes `Deployment` (or `StatefulSet`, `Job`, etc.):
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+spec:
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+      annotations:
+        dapr.io/enabled: "true"
+        dapr.io/app-id: "myapp"
+        dapr.io/app-port: "8080"
+    spec:
+      containers:
+        - name: myapp
+          image: myregistry/myapp:latest
+          ports:
+            - containerPort: 8080
+```
+
+The `dapr-sidecar-injector` mutating webhook intercepts the pod creation request and adds the `daprd` container automatically.
+
+### Key annotations
+
+| Annotation | Required | Description |
+|---|---|---|
+| `dapr.io/enabled` | Yes | Set to `"true"` to inject the Dapr sidecar. |
+| `dapr.io/app-id` | Yes | Unique identifier for this application. Used for service discovery and mTLS identity. |
+| `dapr.io/app-port` | Recommended | Port your app listens on. Required for service invocation to work. |
+| `dapr.io/app-protocol` | No | Protocol your app uses: `http` (default), `grpc`, `https`, `grpcs`, `h2c`. |
+| `dapr.io/config` | No | Name of a Dapr `Configuration` CRD to apply to this sidecar. |
+| `dapr.io/log-level` | No | Log level for this sidecar: `debug`, `info` (default), `warn`, `error`. |
+| `dapr.io/enable-api-logging` | No | Set to `"true"` to log all API calls made through the sidecar. |
+| `dapr.io/http-max-request-size` | No | Max request body size in MB (default: 4). |
+
+<Warning>
+  `dapr.io/app-id` must be unique within a namespace. Duplicate app IDs cause unpredictable behavior in service invocation and actor placement.
+</Warning>
+
+## Deploy Dapr components
+
+Dapr components are Kubernetes custom resources. Apply them with `kubectl`:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+  namespace: default
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: "redis-master.default.svc.cluster.local:6379"
+    - name: redisPassword
+      secretKeyRef:
+        name: redis-secret
+        key: password
+auth:
+  secretStore: kubernetes
+```
+
+```bash
+kubectl apply -f statestore.yaml
+```
+
+The `dapr-operator` watches for component changes and notifies relevant sidecars in real time. If you update a component, running sidecars receive the updated configuration without restarting.
+
+<Tip>
+  Use `auth.secretStore: kubernetes` to pull sensitive metadata values (passwords, connection strings) from Kubernetes Secrets rather than embedding them in plaintext.
+</Tip>
+
+### Scope components to specific apps
+
+Add a `scopes` list to limit which app IDs can load a component:
+
+```yaml
+scopes:
+  - orderservice
+  - inventoryservice
+```
+
+## Apply a Dapr configuration
+
+`Configuration` CRDs control per-sidecar settings like tracing, mTLS, middleware, and access control:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: appconfig
+  namespace: default
+spec:
+  tracing:
+    samplingRate: "1"
+    zipkin:
+      endpointAddress: http://zipkin.default.svc.cluster.local:9411/api/v2/spans
+```
+
+Reference the configuration from your deployment annotation:
+
+```yaml
+dapr.io/config: "appconfig"
+```
+
+## Check deployment status
+
+```bash
+# Dapr control plane health
+kubectl get pods -n dapr-system
+
+# Sidecar status in your app namespace
+kubectl get pods -n default
+
+# Dapr component status
+kubectl get components -n default
+
+# Describe a specific component
+kubectl describe component statestore -n default
+```
+
+## Upgrade Dapr
+
+<Steps>
+  <Step title="Update the Helm repo">
+    ```bash
+    helm repo update
+    ```
+  </Step>
+  <Step title="Upgrade the control plane">
+    ```bash
+    helm upgrade dapr dapr/dapr \
+      --namespace dapr-system \
+      --wait
+    ```
+  </Step>
+  <Step title="Restart application pods">
+    Existing pods continue running their previous sidecar version until they restart. Roll your deployments to pick up the new `daprd` image:
+
+    ```bash
+    kubectl rollout restart deployment/myapp -n default
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  During an upgrade, the Dapr control plane and sidecars support N-1 version compatibility. It is safe to upgrade the control plane before rolling application pods.
+</Note>

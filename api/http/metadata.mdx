@@ -1,0 +1,277 @@
+---
+title: "Metadata API"
+description: "Inspect sidecar metadata, set custom attributes, check sidecar health, and trigger graceful shutdown."
+---
+
+The Metadata API provides introspection and operational endpoints for the Dapr sidecar. Use it to discover registered components, active actors, pub/sub subscriptions, and runtime information. Health endpoints are used by orchestrators (Kubernetes, etc.) to manage the sidecar lifecycle.
+
+## Endpoints
+
+| Method | Path | Version | Description |
+|---|---|---|---|
+| `GET` | `/v1.0/metadata` | v1.0 | Get sidecar metadata. |
+| `PUT` | `/v1.0/metadata/{key}` | v1.0 | Set a custom metadata attribute. |
+| `GET` | `/v1.0/healthz` | v1.0 | Check sidecar health (readiness). |
+| `GET` | `/v1.0/healthz/outbound` | v1.0 | Check outbound connectivity health. |
+| `POST` | `/v1.0/shutdown` | v1.0 | Initiate graceful sidecar shutdown. |
+
+---
+
+## Get metadata
+
+```
+GET http://localhost:3500/v1.0/metadata
+```
+
+Returns metadata about the running sidecar, including the app ID, registered components, active actors, enabled features, pub/sub subscriptions, and HTTP endpoint registrations.
+
+This endpoint is public (accessible without an API token even when token authentication is enabled).
+
+### Response
+
+<ResponseField name="id" type="string">
+  The Dapr app ID of this sidecar instance.
+</ResponseField>
+
+<ResponseField name="runtimeVersion" type="string">
+  The Dapr runtime version (e.g., `1.14.0`).
+</ResponseField>
+
+<ResponseField name="enabledFeatures" type="string[]">
+  List of alpha/preview features that are enabled on this sidecar.
+</ResponseField>
+
+<ResponseField name="actors" type="object[]">
+  Active actor types and their instance counts (legacy field).
+  <Expandable title="actor count properties">
+    <ResponseField name="type" type="string">Actor type name.</ResponseField>
+    <ResponseField name="count" type="integer">Number of active instances.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="actorRuntime" type="object">
+  Actor runtime status.
+  <Expandable title="actorRuntime properties">
+    <ResponseField name="runtimeStatus" type="string">Current actor runtime status (e.g., `RUNNING`, `DISABLED`).</ResponseField>
+    <ResponseField name="activeActors" type="object[]">Array of active actor type/count pairs.</ResponseField>
+    <ResponseField name="hostReady" type="boolean">Whether the actor host is ready to accept calls.</ResponseField>
+    <ResponseField name="placement" type="string">The placement service address being used.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="components" type="object[]">
+  Registered Dapr components.
+  <Expandable title="component properties">
+    <ResponseField name="name" type="string">Component name.</ResponseField>
+    <ResponseField name="type" type="string">Component type (e.g., `state.redis`).</ResponseField>
+    <ResponseField name="version" type="string">Component version.</ResponseField>
+    <ResponseField name="capabilities" type="string[]">List of capabilities supported by this component.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="extended" type="object">
+  Map of custom metadata key/value pairs set via `PUT /v1.0/metadata/{key}`.
+</ResponseField>
+
+<ResponseField name="subscriptions" type="object[]">
+  Active pub/sub subscriptions.
+  <Expandable title="subscription properties">
+    <ResponseField name="pubsubname" type="string">Pub/sub component name.</ResponseField>
+    <ResponseField name="topic" type="string">Subscribed topic name.</ResponseField>
+    <ResponseField name="metadata" type="object">Subscription metadata.</ResponseField>
+    <ResponseField name="rules" type="object[]">Routing rules for this subscription.</ResponseField>
+    <ResponseField name="deadLetterTopic" type="string">Dead-letter topic, if configured.</ResponseField>
+    <ResponseField name="type" type="string">Subscription type (`PROGRAMMATIC` or `DECLARATIVE`).</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="httpEndpoints" type="object[]">
+  Registered HTTP endpoint components.
+  <Expandable title="HTTP endpoint properties">
+    <ResponseField name="name" type="string">HTTP endpoint component name.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="appConnectionProperties" type="object">
+  How the sidecar connects to the application.
+  <Expandable title="appConnectionProperties">
+    <ResponseField name="port" type="integer">Application port.</ResponseField>
+    <ResponseField name="protocol" type="string">Protocol used (e.g., `http`, `grpc`).</ResponseField>
+    <ResponseField name="channelAddress" type="string">Address of the app channel.</ResponseField>
+    <ResponseField name="maxConcurrency" type="integer">Max concurrent calls to the app.</ResponseField>
+    <ResponseField name="health" type="object">App health check configuration.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="workflows" type="object">
+  Workflow runtime information.
+  <Expandable title="workflow properties">
+    <ResponseField name="connectedWorkers" type="integer">Number of connected workflow workers.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json
+{
+  "id": "my-app",
+  "runtimeVersion": "1.14.0",
+  "enabledFeatures": ["HotReload"],
+  "actors": [
+    { "type": "OrderActor", "count": 3 }
+  ],
+  "actorRuntime": {
+    "runtimeStatus": "RUNNING",
+    "activeActors": [
+      { "type": "OrderActor", "count": 3 }
+    ],
+    "hostReady": true,
+    "placement": "localhost:50005"
+  },
+  "components": [
+    {
+      "name": "myredis",
+      "type": "state.redis",
+      "version": "v1",
+      "capabilities": ["ETAG", "TRANSACTIONAL", "QUERY_API"]
+    },
+    {
+      "name": "mypubsub",
+      "type": "pubsub.redis",
+      "version": "v1",
+      "capabilities": []
+    }
+  ],
+  "extended": {
+    "deploymentVersion": "v2.1.0"
+  },
+  "subscriptions": [
+    {
+      "pubsubname": "mypubsub",
+      "topic": "orders",
+      "deadLetterTopic": "orders-dlq",
+      "type": "PROGRAMMATIC"
+    }
+  ],
+  "httpEndpoints": [],
+  "appConnectionProperties": {
+    "port": 8080,
+    "protocol": "http",
+    "channelAddress": "localhost",
+    "maxConcurrency": 0
+  },
+  "workflows": {
+    "connectedWorkers": 1
+  }
+}
+```
+
+### Example
+
+```bash
+curl http://localhost:3500/v1.0/metadata
+```
+
+---
+
+## Set custom metadata
+
+```
+PUT http://localhost:3500/v1.0/metadata/{key}
+```
+
+Stores a custom string value in the sidecar's extended metadata map. Values set here are returned under the `extended` field in `GET /v1.0/metadata`. Useful for labeling sidecar instances with deployment version, region, or other attributes.
+
+### Path parameters
+
+<ParamField path="key" type="string" required>
+  The metadata attribute name to set.
+</ParamField>
+
+### Request body
+
+A plain-text string value (not JSON-encoded). The `Content-Type` header is not required.
+
+```
+v2.1.0
+```
+
+### Response
+
+`204 No Content` on success.
+
+### Example
+
+```bash
+curl -X PUT http://localhost:3500/v1.0/metadata/deploymentVersion \
+  -d "v2.1.0"
+```
+
+---
+
+## Health check (inbound readiness)
+
+```
+GET http://localhost:3500/v1.0/healthz
+```
+
+Returns `204 No Content` when the sidecar is ready to accept requests. Returns an error when the sidecar is initializing or unhealthy.
+
+This endpoint is always accessible without an API token. Use it as a readiness probe in Kubernetes.
+
+### Query parameters
+
+<ParamField query="appid" type="string">
+  If provided, returns an error if the current sidecar's app ID does not match this value. Used by name resolvers (e.g., Consul) to detect app replacement.
+</ParamField>
+
+### Response
+
+- `204 No Content` — sidecar is healthy and ready.
+- `500 Internal Server Error` — sidecar is not yet ready; check the `message` field.
+
+### Example
+
+```bash
+curl -i http://localhost:3500/v1.0/healthz
+# HTTP/1.1 204 No Content
+```
+
+---
+
+## Health check (outbound readiness)
+
+```
+GET http://localhost:3500/v1.0/healthz/outbound
+```
+
+Returns `204 No Content` when the sidecar's outbound connections (to components, placement service, etc.) are healthy. Returns an error if the sidecar cannot communicate with its dependencies.
+
+Use this as a liveness probe or for pre-flight checks before processing requests that require outbound communication.
+
+### Response
+
+- `204 No Content` — outbound connections are healthy.
+- `500 Internal Server Error` — one or more outbound connections are unhealthy.
+
+---
+
+## Shutdown
+
+```
+POST http://localhost:3500/v1.0/shutdown
+```
+
+Initiates a graceful shutdown of the Dapr sidecar. In-flight requests are allowed to complete before the sidecar terminates.
+
+<Warning>
+  This endpoint stops the Dapr sidecar process. In Kubernetes, the pod will be restarted according to the pod's restart policy. Use with caution in production environments.
+</Warning>
+
+### Response
+
+`204 No Content` — shutdown initiated. The sidecar will terminate shortly after responding.
+
+### Example
+
+```bash
+curl -X POST http://localhost:3500/v1.0/shutdown
+```

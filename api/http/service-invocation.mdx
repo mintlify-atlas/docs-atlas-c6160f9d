@@ -1,0 +1,97 @@
+---
+title: "Service invocation API"
+description: "Invoke methods on other Dapr-enabled services over HTTP using the sidecar service invocation building block."
+---
+
+The service invocation API lets your application call methods on any other Dapr-enabled service. The sidecar handles service discovery, retries, and optionally mutual TLS. All HTTP methods (`GET`, `POST`, `PUT`, `DELETE`, `PATCH`, etc.) are supported and forwarded as-is to the target application.
+
+## Endpoints
+
+| Method | Path | Version | Description |
+|---|---|---|---|
+| `POST` `PUT` `GET` `DELETE` `PATCH` | `/v1.0/invoke/{appId}/method/{method-name}` | v1.0 | Invoke a method on a remote Dapr app. |
+
+---
+
+## Invoke a method
+
+```
+POST/GET/PUT/DELETE http://localhost:3500/v1.0/invoke/{appId}/method/{method-name}
+```
+
+Forwards the HTTP request to the method `{method-name}` on the application with app-id `{appId}`. The HTTP method, headers, query parameters, and body are all forwarded verbatim to the target application.
+
+### Path parameters
+
+<ParamField path="appId" type="string" required>
+  The Dapr app-id of the target service. To invoke an app in a different namespace, use the `{appId}.{namespace}` format (e.g., `checkout.production`).
+</ParamField>
+
+<ParamField path="method-name" type="string" required>
+  The method path to invoke on the target application. Supports nested paths (e.g., `orders/1234/items`).
+</ParamField>
+
+### Query parameters
+
+Query parameters are forwarded to the target application unchanged.
+
+### Request headers
+
+All request headers are forwarded to the target application. The `Content-Type` header is preserved. Dapr adds tracing headers (`traceparent`, `tracestate`) automatically.
+
+### Request body
+
+The request body is forwarded unchanged to the target application. Set `Content-Type: application/json` for JSON payloads.
+
+### Response
+
+The response — including status code, headers, and body — is the direct response from the target application. Dapr does not transform it.
+
+### Example
+
+```bash
+curl -X POST http://localhost:3500/v1.0/invoke/checkout/method/orders \
+  -H "Content-Type: application/json" \
+  -d '{"item": "widget", "quantity": 10}'
+```
+
+To call an app in a different namespace:
+
+```bash
+curl http://localhost:3500/v1.0/invoke/checkout.production/method/orders/42
+```
+
+### Error codes
+
+| Status | Description |
+|---|---|
+| `400` | Bad request — missing or invalid `appId` or `method-name`. |
+| `403` | Forbidden — the call was denied by a service invocation access-control policy. |
+| `500` | Internal error — the sidecar could not reach the target application or the target returned a non-2xx response that Dapr treats as an error. |
+
+<Note>
+  When the target application returns an error (any non-2xx status), Dapr forwards that status code and response body directly to the caller without wrapping it. The `500` error code above applies only to infrastructure-level failures such as service discovery failures or network timeouts.
+</Note>
+
+## Namespace qualifier
+
+To invoke a service in a specific namespace when using a namespace-aware name resolver (e.g., Kubernetes), append the namespace to the app-id:
+
+```
+/v1.0/invoke/{appId}.{namespace}/method/{method-name}
+```
+
+```bash
+# Invoke the 'process' method on 'inventory' app in the 'warehouse' namespace
+curl http://localhost:3500/v1.0/invoke/inventory.warehouse/method/process
+```
+
+## Header forwarding
+
+The following headers are handled specially:
+
+| Header | Behavior |
+|---|---|
+| `Content-Type` | Forwarded to the target app. |
+| `dapr-app-id` | Alternative way to specify the target app-id (used by some SDKs). |
+| `traceparent` / `tracestate` | Injected by Dapr for distributed tracing (W3C Trace Context). |

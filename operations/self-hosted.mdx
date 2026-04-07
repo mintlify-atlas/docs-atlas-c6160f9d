@@ -1,0 +1,196 @@
+---
+title: "Self-hosted mode"
+description: "Run Dapr as a local process for development and non-Kubernetes deployments using the Dapr CLI."
+keywords: ["dapr", "self-hosted", "standalone", "dapr init", "dapr run", "CLI", "local development", "docker"]
+---
+
+In self-hosted mode (also called standalone mode in the Dapr source), the `daprd` process runs directly on your machine alongside your application. There is no Kubernetes cluster required. This mode is the standard approach for local development and can also be used in production on bare metal or VM-based environments.
+
+## Prerequisites
+
+<Tabs>
+  <Tab title="With Docker (default)">
+    - [Dapr CLI](https://docs.dapr.io/getting-started/install-dapr-cli/)
+    - Docker (used to run Redis and Zipkin)
+  </Tab>
+  <Tab title="Slim mode (no Docker)">
+    - [Dapr CLI](https://docs.dapr.io/getting-started/install-dapr-cli/)
+    - No Docker required
+  </Tab>
+</Tabs>
+
+## Install the Dapr CLI
+
+<Tabs>
+  <Tab title="Linux / macOS">
+    ```bash
+    wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash
+    ```
+  </Tab>
+  <Tab title="Windows (PowerShell)">
+    ```powershell
+    powershell -Command "iwr -useb https://raw.githubusercontent.com/dapr/cli/master/install/install.ps1 | iex"
+    ```
+  </Tab>
+  <Tab title="Homebrew">
+    ```bash
+    brew install dapr/tap/dapr-cli
+    ```
+  </Tab>
+</Tabs>
+
+Verify the installation:
+
+```bash
+dapr --version
+```
+
+## Initialize Dapr
+
+```bash
+dapr init
+```
+
+`dapr init` performs the following setup automatically:
+
+1. Downloads and installs the `daprd` binary to `$HOME/.dapr/bin/`.
+2. Creates the default configuration file at `~/.dapr/config.yaml`.
+3. Creates the default component directory at `~/.dapr/components/`.
+4. Starts a **Redis** container (`dapr_redis`) for state management and pub/sub.
+5. Starts a **Zipkin** container (`dapr_zipkin`) for distributed tracing.
+6. Writes default component files for the Redis state store and pub/sub broker.
+
+After initialization, the default component files are:
+
+```
+~/.dapr/
+├── bin/
+│   └── daprd
+├── components/
+│   ├── pubsub.yaml      # Redis pub/sub
+│   └── statestore.yaml  # Redis state store
+└── config.yaml          # Default Dapr configuration
+```
+
+### Slim init (without Docker)
+
+If you do not have Docker or want to skip the Redis and Zipkin containers:
+
+```bash
+dapr init --slim
+```
+
+Slim init downloads `daprd` and `placement` binaries only. No component files are created — you must add them manually before using state management or pub/sub.
+
+<Note>
+  In slim mode, mTLS between services is disabled by default. The Sentry CA service does not start automatically. To enable mTLS, start `daprd` with `--enable-mtls` and run the `sentry` binary separately.
+</Note>
+
+## Run an application with Dapr
+
+```bash
+dapr run \
+  --app-id myapp \
+  --app-port 8080 \
+  -- node app.js
+```
+
+`dapr run` starts a `daprd` sidecar process and then launches your application command. The sidecar exposes the Dapr HTTP and gRPC APIs on localhost.
+
+### Key CLI flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--app-id` | (required) | Unique application identifier. Used for service discovery. |
+| `--app-port` | — | Port your application listens on. Required for service invocation. |
+| `--dapr-http-port` | `3500` | Port the Dapr HTTP API listens on. |
+| `--dapr-grpc-port` | `50001` | Port the Dapr gRPC API listens on. |
+| `--resources-path` | `~/.dapr/components` | Path to a directory of component YAML files. Can be specified multiple times. |
+| `--config` | `~/.dapr/config.yaml` | Path to a Dapr configuration YAML file. |
+| `--log-level` | `info` | Log level: `debug`, `info`, `warn`, `error`. |
+| `--enable-api-logging` | `false` | Log every Dapr API call. |
+| `--app-protocol` | `http` | Protocol your app uses: `http`, `grpc`, `https`, `grpcs`, `h2c`. |
+
+### Example: multiple services
+
+Run each service in a separate terminal, giving each a unique `--app-id`:
+
+```bash
+# Terminal 1 — order service
+dapr run --app-id orderservice --app-port 8081 -- python order_service.py
+
+# Terminal 2 — inventory service
+dapr run --app-id inventoryservice --app-port 8082 -- python inventory_service.py
+```
+
+The two sidecars discover each other by app ID and communicate via localhost gRPC.
+
+## Component files
+
+Component files are YAML files in the resources path. The default path is `~/.dapr/components/`. You can point to a custom directory with `--resources-path`.
+
+```yaml
+# ~/.dapr/components/statestore.yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: localhost:6379
+    - name: redisPassword
+      value: ""
+```
+
+<Tip>
+  Dapr watches the components directory for changes by default. If you update a component file while `daprd` is running, Dapr hot-reloads the component without requiring a restart (requires the `HotReload` feature flag to be enabled in your configuration).
+</Tip>
+
+## Configuration file
+
+The Dapr configuration file at `~/.dapr/config.yaml` (or the path set by `--config`) controls sidecar behavior:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: daprConfig
+spec:
+  tracing:
+    samplingRate: "1"
+    zipkin:
+      endpointAddress: http://localhost:9411/api/v2/spans
+```
+
+## Running without Docker
+
+After `dapr init --slim`, you can run apps without any Docker containers. You will need to provide your own component backends (e.g., a locally installed Redis instance) and point component files at them:
+
+```yaml
+# ~/.dapr/components/statestore.yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: localhost:6379
+```
+
+Start the placement service manually if you are using actors:
+
+```bash
+~/.dapr/bin/placement
+```
+
+Then run your app as usual:
+
+```bash
+dapr run --app-id myapp --app-port 8080 -- ./myapp
+```

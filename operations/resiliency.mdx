@@ -1,0 +1,276 @@
+---
+title: "Resiliency"
+description: "Configure timeouts, retries, and circuit breakers using Dapr Resiliency policies to make distributed applications fault-tolerant."
+keywords: ["dapr", "resiliency", "retry", "circuit breaker", "timeout", "fault tolerance", "policy", "backoff"]
+---
+
+Dapr's resiliency subsystem applies fault-tolerance policies to every outbound call made through the sidecar — service invocations, component interactions, and actor calls. Policies are defined declaratively in YAML and applied to named targets without any changes to application code.
+
+<Note>
+  Dapr also has built-in internal retry policies (e.g., `DaprBuiltInServiceRetries`, `DaprBuiltInActorRetries`) that are separate from user-defined resiliency specs. User policies are layered on top.
+</Note>
+
+## Policy types
+
+<CardGroup cols={3}>
+  <Card title="Timeouts" icon="clock">
+    Set a maximum duration for any operation. If the operation does not complete in time, Dapr cancels it and returns an error to the caller.
+  </Card>
+  <Card title="Retries" icon="rotate-right">
+    Automatically retry failed operations using constant or exponential backoff, with optional jitter and a configurable maximum retry count.
+  </Card>
+  <Card title="Circuit breakers" icon="bolt">
+    Track failure rates and stop forwarding requests to a failing target for a configurable period, allowing it to recover.
+  </Card>
+</CardGroup>
+
+## Resiliency spec
+
+Define all policies in a single `Resiliency` resource, then map named policies to targets:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: myresiliency
+  namespace: default
+spec:
+  policies:
+    timeouts:
+      general: 5s
+      longRunning: 30s
+
+    retries:
+      retryForever:
+        policy: constant
+        duration: 5s
+        maxRetries: -1
+      exponentialBackoff:
+        policy: exponential
+        maxInterval: 30s
+        maxRetries: 5
+
+    circuitBreakers:
+      simpleCB:
+        maxRequests: 1
+        interval: 5s
+        timeout: 30s
+        trip: consecutiveFailures > 5
+
+  targets:
+    apps:
+      appB:
+        timeout: general
+        retry: retryForever
+        circuitBreaker: simpleCB
+
+    components:
+      myredis:
+        outbound:
+          timeout: general
+          retry: exponentialBackoff
+        inbound:
+          timeout: longRunning
+
+    actors:
+      myactortype:
+        timeout: general
+        retry: retryForever
+        circuitBreaker: simpleCB
+        circuitBreakerScope: type
+```
+
+In Kubernetes, apply the spec with:
+
+```bash
+kubectl apply -f resiliency.yaml
+```
+
+In self-hosted mode, place the YAML file in your components/resources directory and point `dapr run` at it with `--resources-path`.
+
+## Timeout policies
+
+A timeout sets the maximum time `daprd` waits for a response before returning an error to the caller. Timeouts are expressed as Go duration strings (e.g., `5s`, `1m`, `500ms`).
+
+```yaml
+spec:
+  policies:
+    timeouts:
+      general: 5s
+      slow: 30s
+```
+
+Assign a timeout to a target:
+
+```yaml
+targets:
+  apps:
+    paymentservice:
+      timeout: general
+```
+
+## Retry policies
+
+Retries automatically re-invoke a failed operation. Dapr supports two retry strategies:
+
+### Constant backoff
+
+Retries at a fixed interval:
+
+```yaml
+retries:
+  constantRetry:
+    policy: constant
+    duration: 3s
+    maxRetries: 5
+```
+
+### Exponential backoff
+
+Doubles the wait interval between retries, up to `maxInterval`:
+
+```yaml
+retries:
+  exponentialRetry:
+    policy: exponential
+    initialInterval: 500ms
+    maxInterval: 30s
+    maxRetries: 10
+    multiplier: 1.5
+```
+
+### Retry configuration fields
+
+| Field | Description |
+|---|---|
+| `policy` | `constant` or `exponential`. |
+| `maxRetries` | Maximum number of retries. `-1` means unlimited. |
+| `duration` | (constant) Fixed wait between retries. |
+| `initialInterval` | (exponential) Starting wait interval. |
+| `maxInterval` | (exponential) Maximum wait interval. |
+| `multiplier` | (exponential) Backoff multiplier. Default is `1.5`. |
+
+<Warning>
+  Setting `maxRetries: -1` (retry forever) on a non-idempotent operation can cause duplicate side effects. Ensure the target operation is idempotent or use a circuit breaker to break the retry loop when the service is down.
+</Warning>
+
+## Circuit breaker policies
+
+Circuit breakers track a stream of requests and "trip" (open) when failures exceed a threshold. While open, the circuit breaker returns an error immediately without calling the target. After the `timeout` period, it enters the half-open state and allows a limited number of test requests through.
+
+### Circuit breaker states
+
+```
+  Closed ──(failures > threshold)──► Open
+     ▲                                  │
+     │                                  │
+     └──(test requests succeed)─── Half-Open
+```
+
+| State | Behavior |
+|---|---|
+| **Closed** | All requests pass through. Failures are counted. |
+| **Open** | All requests fail immediately. No calls are made to the target. |
+| **Half-open** | A limited number of test requests (`maxRequests`) pass through to check if the target has recovered. |
+
+### Circuit breaker configuration
+
+```yaml
+circuitBreakers:
+  simpleCB:
+    maxRequests: 1
+    interval: 5s
+    timeout: 30s
+    trip: consecutiveFailures > 5
+```
+
+| Field | Description |
+|---|---|
+| `maxRequests` | Number of requests allowed through in half-open state. |
+| `interval` | Rolling window duration for counting failures. `0` means count since the last state change. |
+| `timeout` | How long the circuit stays open before moving to half-open. |
+| `trip` | Expression that triggers the open state. |
+
+### Circuit breaker scope for actors
+
+For actor targets, you can control how granular the circuit breaker state is:
+
+```yaml
+targets:
+  actors:
+    myactortype:
+      circuitBreaker: simpleCB
+      circuitBreakerScope: id
+```
+
+| Scope | Description |
+|---|---|
+| `type` | One circuit breaker state shared across all instances of an actor type. |
+| `id` | Separate circuit breaker state per actor instance (type + ID). |
+| `both` | Tracks both type-level and ID-level state simultaneously. |
+
+## Targets
+
+### App targets
+
+Apply policies to service invocation calls directed at a specific `app-id`:
+
+```yaml
+targets:
+  apps:
+    checkoutservice:
+      timeout: general
+      retry: exponentialRetry
+      circuitBreaker: simpleCB
+```
+
+### Component targets
+
+Apply policies to inbound and outbound interactions with a named component:
+
+```yaml
+targets:
+  components:
+    orders-pubsub:
+      outbound:
+        timeout: general
+        retry: exponentialRetry
+      inbound:
+        timeout: longRunning
+```
+
+Component types that support resiliency policies include: `Binding`, `Configuration`, `Lock`, `Pubsub`, `Crypto`, `Conversation`, `Secretstore`, and `Statestore`.
+
+### Actor targets
+
+Apply policies to actor method invocations for a given actor type:
+
+```yaml
+targets:
+  actors:
+    ShoppingCartActor:
+      timeout: general
+      retry: retryForever
+      circuitBreaker: simpleCB
+      circuitBreakerScope: id
+```
+
+## Default policies
+
+You can define default policies that apply to all apps, all components, or all actors when no explicit target policy is set:
+
+```yaml
+spec:
+  policies:
+    retries:
+      DefaultAppRetryPolicy:
+        policy: constant
+        duration: 1s
+        maxRetries: 3
+      DefaultComponentOutboundRetryPolicy:
+        policy: exponential
+        maxInterval: 15s
+        maxRetries: 5
+```
+
+Default policy names follow the pattern `Default<Target>RetryPolicy`, `Default<Target>TimeoutPolicy`, and `Default<Target>CircuitBreakerPolicy`, where `<Target>` is `App`, `Actor`, or `Component`.

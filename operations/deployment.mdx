@@ -1,0 +1,94 @@
+---
+title: "Deployment overview"
+description: "Understand Dapr's deployment modes, system services, and how the sidecar model works in production."
+keywords: ["dapr", "deployment", "sidecar", "daprd", "kubernetes", "self-hosted", "operator", "sentry", "placement"]
+---
+
+Dapr runs as a sidecar alongside your application. Every instance of your app gets its own Dapr sidecar process (`daprd`) that handles all Dapr API calls on behalf of your app. This sidecar model keeps your application code free of Dapr-specific dependencies.
+
+Dapr supports two deployment modes:
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes" icon="dharmachakra" href="/operations/kubernetes">
+    Dapr installs as a set of system services. The sidecar injector automatically adds `daprd` to annotated pods.
+  </Card>
+  <Card title="Self-hosted" icon="server" href="/operations/self-hosted">
+    Dapr runs as a local process or Docker container alongside your app. Ideal for development and edge deployments.
+  </Card>
+</CardGroup>
+
+## System services
+
+Dapr's control plane consists of several system services. In Kubernetes mode, these run as pods in the `dapr-system` namespace. In self-hosted mode, `daprd` runs directly without the full control plane.
+
+<CardGroup cols={2}>
+  <Card title="daprd" icon="cube">
+    The Dapr sidecar. Runs as a process (self-hosted) or container (Kubernetes) next to each application instance. Exposes the Dapr HTTP and gRPC APIs on localhost.
+  </Card>
+  <Card title="dapr-operator" icon="sliders">
+    Manages Dapr component CRDs and pushes component configuration updates to running sidecars. Only runs in Kubernetes mode.
+  </Card>
+  <Card title="dapr-sidecar-injector" icon="syringe">
+    Implements a Kubernetes mutating admission webhook. Automatically injects `daprd` as a sidecar container into pods that have the `dapr.io/enabled: "true"` annotation.
+  </Card>
+  <Card title="dapr-placement" icon="map">
+    Manages the actor placement table — a consistent hash ring that determines which Dapr sidecar hosts which actor type instances. Required when using the Actors building block.
+  </Card>
+  <Card title="dapr-sentry" icon="shield">
+    Acts as a certificate authority (CA). Issues SPIFFE-compatible X.509 certificates to each `daprd` instance so that mTLS can be established between sidecars automatically.
+  </Card>
+  <Card title="dapr-scheduler" icon="calendar">
+    Manages job and reminder scheduling. Routes scheduled invocations to the correct app at the configured time.
+  </Card>
+</CardGroup>
+
+### Service responsibilities at a glance
+
+| Service | Mode | Responsibility |
+|---|---|---|
+| `daprd` | Both | Per-app sidecar; exposes Dapr APIs |
+| `dapr-operator` | Kubernetes | Syncs component CRDs to sidecars |
+| `dapr-sidecar-injector` | Kubernetes | Webhook that injects `daprd` into pods |
+| `dapr-placement` | Both | Actor distribution hash ring |
+| `dapr-sentry` | Both | mTLS certificate authority |
+| `dapr-scheduler` | Both | Job and reminder scheduling |
+
+## Component YAML
+
+Dapr capabilities — such as state stores, pub/sub brokers, and secret stores — are configured through component YAML files. Each component file declares a `type`, a set of `metadata` key-value pairs, and optional `scopes` that restrict which apps can use it.
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+  namespace: default
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: "localhost:6379"
+    - name: redisPassword
+      value: ""
+scopes:
+  - myapp
+```
+
+In Kubernetes, components are deployed as custom resources and the `dapr-operator` distributes them to the relevant sidecars. In self-hosted mode, components are YAML files stored in a local directory (default: `~/.dapr/components/`).
+
+<Tip>
+  Use `scopes` to restrict which app IDs can use a component. This is a simple but effective way to enforce least-privilege access to infrastructure.
+</Tip>
+
+## Version compatibility
+
+Dapr uses semantic versioning. The Dapr runtime (`daprd`), CLI, and Helm chart versions should all match for a given release. The Dapr SDK versions follow their own versioning but publish a compatibility matrix against the runtime API version.
+
+- The **Dapr runtime API** version is stable at `v1.0` and is backwards-compatible within a major version.
+- **Component spec versions** (e.g., `v1`, `v2`) are declared in the component YAML and may change across Dapr releases.
+- When upgrading, always consult the release notes for breaking changes to component metadata or API behavior.
+
+<Note>
+  Dapr guarantees N-1 compatibility: a Dapr sidecar at version N will interoperate with control plane services at version N-1. Do not run mixed major versions in production.
+</Note>

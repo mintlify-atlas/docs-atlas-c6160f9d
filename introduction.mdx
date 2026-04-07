@@ -1,0 +1,124 @@
+---
+title: "Introduction to Dapr"
+description: "Dapr is a portable, event-driven sidecar runtime that gives any application built-in APIs for state, messaging, workflows, and more."
+keywords: ["dapr", "distributed applications", "sidecar", "building blocks", "microservices", "cncf"]
+---
+
+Dapr (Distributed Application Runtime) is a set of integrated APIs with built-in best practices for building distributed applications. It runs as a lightweight sidecar process alongside your application — exposing HTTP and gRPC APIs on `localhost` — so you can adopt it incrementally with no special SDKs or runtime dependencies required.
+
+<Note>
+  Dapr is a graduated [CNCF](https://cncf.io) project, trusted in production by hundreds of organizations worldwide.
+</Note>
+
+## The sidecar model
+
+Dapr injects a sidecar process (`daprd`) next to each application instance. Your application communicates with its sidecar over standard HTTP or gRPC on the loopback interface. The sidecar handles all external communication: talking to state stores, message brokers, secret vaults, other services, and more.
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Host / Pod                                          │
+│                                                      │
+│   ┌─────────────┐   HTTP/gRPC    ┌───────────────┐  │
+│   │  Your App   │◄──localhost───►│  daprd (Dapr  │  │
+│   │  :8080      │                │  sidecar)     │  │
+│   └─────────────┘                │  :3500 HTTP   │  │
+│                                  │  :50001 gRPC  │  │
+│                                  └───────┬───────┘  │
+│                                          │           │
+└──────────────────────────────────────────┼───────────┘
+                                           │
+                     ┌─────────────────────┼──────────────────────┐
+                     │                     │                      │
+              ┌──────▼──────┐   ┌──────────▼──────┐   ┌──────────▼──────┐
+              │  State store │   │  Message broker │   │  Secret store   │
+              │  (Redis, PG) │   │  (Kafka, NATS)  │   │  (Vault, KMS)   │
+              └─────────────┘   └─────────────────┘   └─────────────────┘
+```
+
+Your application calls `http://localhost:3500/v1.0/...` for every Dapr capability. The sidecar translates that call to whichever backend component is configured — Redis, Kafka, Azure Service Bus, HashiCorp Vault, and so on — without any changes to your application code.
+
+### Key properties of the sidecar model
+
+- **Language agnostic.** Any HTTP or gRPC client works. No SDK required.
+- **No framework lock-in.** Use Express, Spring Boot, FastAPI, or raw sockets.
+- **Portable.** The same application code runs locally, on Kubernetes, and on edge devices.
+- **Incrementally adoptable.** Adopt one building block at a time without rewriting existing code.
+
+## Building blocks
+
+Building blocks are the Dapr APIs your application calls. Each building block maps to a group of HTTP/gRPC endpoints and is backed by a pluggable component you configure separately.
+
+<CardGroup cols={2}>
+  <Card title="Service invocation" icon="arrow-right-arrow-left" href="/building-blocks/service-invocation">
+    Call other Dapr-enabled services by app ID with automatic service discovery, retries, and mTLS encryption. Uses the `invoke` endpoint group (`/v1.0/invoke/{appId}/method/{method}`).
+  </Card>
+  <Card title="State management" icon="database" href="/building-blocks/state-management">
+    Save and retrieve key/value state via `/v1.0/state/{storeName}`. Supports strong and eventual consistency, first-write and last-write concurrency, and transactional operations.
+  </Card>
+  <Card title="Pub/Sub messaging" icon="tower-broadcast" href="/building-blocks/pub-sub">
+    Publish events to a topic and subscribe to receive them. At-least-once delivery semantics. Dapr handles retries, dead-letter queues, and message routing.
+  </Card>
+  <Card title="Workflows" icon="diagram-project" href="/building-blocks/workflows">
+    Author durable, long-running workflows as code. Built on the actor model for fault-tolerant execution across restarts, with support for sequential, parallel, and fan-out/fan-in patterns.
+  </Card>
+  <Card title="Actors" icon="user-gear" href="/building-blocks/actors">
+    Virtual actor pattern: single-threaded, turn-based execution units that activate on demand and are garbage-collected when idle. Ideal for simulations, game state, and per-entity processing.
+  </Card>
+  <Card title="Bindings" icon="link" href="/building-blocks/bindings">
+    Input bindings trigger your app when an external event fires (e.g., a new S3 object, a cron timer). Output bindings let your app call external systems like Twilio, SMTP, or HTTP endpoints.
+  </Card>
+  <Card title="Secrets" icon="key" href="/building-blocks/secrets">
+    Retrieve secrets from Azure Key Vault, AWS Secrets Manager, HashiCorp Vault, Kubernetes secrets, and more through a uniform API — without credentials in application code.
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/building-blocks/configuration">
+    Read and subscribe to application configuration values from external stores. Your app receives push notifications when values change.
+  </Card>
+  <Card title="Distributed lock" icon="lock" href="/building-blocks/distributed-lock">
+    Acquire and release named mutex locks across distributed application instances to coordinate exclusive access to shared resources.
+  </Card>
+  <Card title="Cryptography" icon="shield-halved" href="/building-blocks/cryptography">
+    Encrypt, decrypt, sign, and verify data using keys stored in external key management systems. Includes both high-level and subtle cryptography APIs (`/v1.0/crypto` and `/v1.0-alpha1/subtlecrypto`).
+  </Card>
+  <Card title="Jobs & Scheduling" icon="calendar-clock" href="/reference/jobs-scheduling">
+    Schedule cron and one-time jobs for future execution. Dapr calls your app when a job fires, with at-least-once delivery guarantees.
+  </Card>
+</CardGroup>
+
+## Pluggable components
+
+Each building block is backed by a **component** — a pluggable implementation that you configure with a YAML file. Components are defined in `dapr/components-contrib` and cover dozens of cloud and open-source backends.
+
+```yaml
+# components/statestore.yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+spec:
+  type: state.redis
+  version: v1
+  metadata:
+    - name: redisHost
+      value: "localhost:6379"
+```
+
+Switching from Redis to PostgreSQL for state storage is a one-line YAML change — your application code stays the same. The same portability applies to message brokers (Kafka → Azure Service Bus), secret stores (HashiCorp Vault → AWS Secrets Manager), and every other component category.
+
+<Tip>
+  Components are loaded at runtime from a directory (self-hosted mode) or from Kubernetes `Component` CRDs. No recompilation required.
+</Tip>
+
+## Where Dapr runs
+
+Dapr runs on Kubernetes (using the Dapr Operator, injector, and Sentry services), as a self-hosted process on any machine for local development, on IoT devices, and inside any container runtime. The `daprd` binary is approximately 58 MB and uses around 4 MB of physical memory at idle.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install the Dapr CLI and make your first API call in under five minutes.
+  </Card>
+  <Card title="Core concepts" icon="book" href="/concepts">
+    Understand building blocks, components, resiliency, security, and observability in depth.
+  </Card>
+</CardGroup>

@@ -1,0 +1,455 @@
+---
+title: "Pub/Sub messaging"
+description: "Decouple services with event-driven pub/sub messaging. Dapr brokers message delivery with at-least-once guarantees."
+keywords: ["pub sub", "publish subscribe", "event driven", "messaging", "Kafka", "Redis Streams", "RabbitMQ", "dead letter"]
+---
+
+The Dapr pub/sub building block lets services communicate asynchronously through named topics. Publishers emit events without knowing which services will consume them. Dapr routes messages to all subscribers and retries delivery until the subscriber acknowledges receipt.
+
+<CardGroup cols={2}>
+  <Card title="At-least-once delivery" icon="circle-check">
+    Dapr retries unacknowledged messages until the subscriber returns a success status, preventing silent message loss.
+  </Card>
+  <Card title="Pluggable brokers" icon="arrows-split-up-and-left">
+    Swap between Redis Streams, Kafka, RabbitMQ, Azure Service Bus, NATS, and others by updating the component YAML.
+  </Card>
+  <Card title="Declarative or programmatic subscriptions" icon="list">
+    Define subscriptions in YAML for operator-managed configuration, or return them dynamically from your application.
+  </Card>
+  <Card title="Dead letter topics" icon="inbox">
+    Route messages that cannot be processed after all retries to a configurable dead letter topic for offline inspection.
+  </Card>
+</CardGroup>
+
+## How it works
+
+<Steps>
+  <Step title="Publisher sends a message">
+    The publishing service posts a message to its local sidecar at `POST /v1.0/publish/{pubsubName}/{topic}`. The sidecar forwards it to the configured message broker.
+  </Step>
+  <Step title="Broker stores and fans out the message">
+    The broker persists the message and makes it available to all subscribers registered for that topic.
+  </Step>
+  <Step title="Dapr delivers to subscriber sidecars">
+    Each subscriber's sidecar polls or receives a push from the broker and calls the subscriber application at the configured endpoint.
+  </Step>
+  <Step title="Subscriber acknowledges or rejects">
+    Returning `200 OK` acknowledges the message. Returning `404` or `500` causes Dapr to retry. Returning `200` with `{"status": "DROP"}` discards the message without retrying.
+  </Step>
+</Steps>
+
+## Publish a message
+
+```
+POST /v1.0/publish/{pubsubName}/{topic}
+```
+
+<ParamField path="pubsubName" type="string" required>
+  The name of the pub/sub component as declared in its component metadata.
+</ParamField>
+
+<ParamField path="topic" type="string" required>
+  The topic name to publish to. Created automatically if it does not exist (broker-dependent).
+</ParamField>
+
+<ParamField query="metadata.ttlInSeconds" type="string">
+  Per-message TTL hint passed to brokers that support message-level expiry.
+</ParamField>
+
+```bash
+curl -X POST http://localhost:3500/v1.0/publish/order-pubsub/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "orderId": "d6e5f6a0",
+    "item": "widget",
+    "quantity": 3,
+    "customerId": "user42"
+  }'
+```
+
+Returns `204 No Content` on success.
+
+### Bulk publish (v1.0 and v1.0-alpha1)
+
+```
+POST /v1.0/publish/bulk/{pubsubName}/{topic}
+```
+
+Send multiple messages in a single request to reduce per-message overhead:
+
+```bash
+curl -X POST http://localhost:3500/v1.0/publish/bulk/order-pubsub/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entries": [
+      {"entryId": "1", "event": {"orderId": "d6e5f6a0"}, "contentType": "application/json"},
+      {"entryId": "2", "event": {"orderId": "e7f8a1b2"}, "contentType": "application/json"}
+    ]
+  }'
+```
+
+## Subscribe to a topic
+
+Dapr discovers your subscriptions at startup by calling `GET /dapr/subscribe` on your application. You can also define subscriptions declaratively.
+
+### Programmatic subscriptions
+
+Your application returns a JSON array describing its subscriptions:
+
+```
+GET /dapr/subscribe
+```
+
+```json
+[
+  {
+    "pubsubname": "order-pubsub",
+    "topic": "orders",
+    "route": "/orders/process"
+  }
+]
+```
+
+Dapr then delivers matching messages to `POST /orders/process` on your application.
+
+### Declarative subscriptions
+
+Define subscriptions as component YAML files instead of embedding them in application code:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Subscription
+metadata:
+  name: order-subscription
+spec:
+  pubsubname: order-pubsub
+  topic: orders
+  route: /orders/process
+scopes:
+  - order-processor
+  - inventory-service
+```
+
+<Tip>
+  Use `scopes` to restrict which app IDs receive deliveries for a topic. Without scopes, all applications with a matching route receive the message.
+</Tip>
+
+### Route-based subscriptions
+
+Route messages to different handlers based on CEL expressions evaluated against the message body:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Subscription
+metadata:
+  name: order-subscription-routed
+spec:
+  pubsubname: order-pubsub
+  topic: orders
+  routes:
+    rules:
+      - match: event.data.priority == "high"
+        path: /orders/priority
+      - match: event.data.priority == "low"
+        path: /orders/standard
+    default: /orders/process
+```
+
+## Message envelope
+
+When Dapr delivers a message to your subscriber, the HTTP POST body contains a CloudEvents-formatted envelope:
+
+```json
+{
+  "specversion": "1.0",
+  "type": "com.dapr.event.sent",
+  "source": "order-service",
+  "id": "d6e5f6a0-1234-abcd-5678-ef90abcdef12",
+  "time": "2024-03-15T10:30:00Z",
+  "datacontenttype": "application/json",
+  "topic": "orders",
+  "pubsubname": "order-pubsub",
+  "data": {
+    "orderId": "d6e5f6a0",
+    "item": "widget",
+    "quantity": 3,
+    "customerId": "user42"
+  }
+}
+```
+
+The `data` field contains exactly what was published. The envelope fields (`id`, `time`, `source`) are added by Dapr automatically.
+
+<Note>
+  If you publish a raw payload without a `Content-Type: application/json` header, Dapr wraps it in the `data_base64` field as a base64-encoded string instead of `data`.
+</Note>
+
+## Subscriber response codes
+
+| HTTP status | Dapr behavior |
+|-------------|---------------|
+| `200 OK` | Message acknowledged. Removed from broker. |
+| `200 OK` + `{"status": "RETRY"}` | Dapr retries delivery using the configured retry policy. |
+| `200 OK` + `{"status": "DROP"}` | Message discarded without retry. |
+| `404 Not Found` | Dapr retries (treated as transient failure). |
+| `500 Internal Server Error` | Dapr retries. |
+
+## Dead letter topics
+
+When all delivery retries are exhausted, Dapr can forward the unprocessable message to a dead letter topic instead of dropping it silently:
+
+```yaml
+apiVersion: dapr.io/v1alpha1
+kind: Subscription
+metadata:
+  name: order-subscription
+spec:
+  pubsubname: order-pubsub
+  topic: orders
+  route: /orders/process
+  deadLetterTopic: orders-dead-letter
+```
+
+A separate service can subscribe to `orders-dead-letter` to inspect, alert on, or replay failed messages.
+
+## Pub/sub component examples
+
+<Tabs>
+  <Tab title="Redis Streams">
+    ```yaml
+    apiVersion: dapr.io/v1alpha1
+    kind: Component
+    metadata:
+      name: order-pubsub
+    spec:
+      type: pubsub.redis
+      version: v1
+      metadata:
+        - name: redisHost
+          value: "localhost:6379"
+        - name: redisPassword
+          value: ""
+    ```
+  </Tab>
+  <Tab title="Kafka">
+    ```yaml
+    apiVersion: dapr.io/v1alpha1
+    kind: Component
+    metadata:
+      name: order-pubsub
+    spec:
+      type: pubsub.kafka
+      version: v1
+      metadata:
+        - name: brokers
+          value: "localhost:9092"
+        - name: consumerGroup
+          value: "order-processors"
+        - name: authType
+          value: "none"
+    ```
+  </Tab>
+  <Tab title="RabbitMQ">
+    ```yaml
+    apiVersion: dapr.io/v1alpha1
+    kind: Component
+    metadata:
+      name: order-pubsub
+    spec:
+      type: pubsub.rabbitmq
+      version: v1
+      metadata:
+        - name: host
+          value: "amqp://guest:guest@localhost:5672"
+        - name: durable
+          value: "true"
+    ```
+  </Tab>
+  <Tab title="Azure Service Bus">
+    ```yaml
+    apiVersion: dapr.io/v1alpha1
+    kind: Component
+    metadata:
+      name: order-pubsub
+    spec:
+      type: pubsub.azure.servicebus.topics
+      version: v1
+      metadata:
+        - name: connectionString
+          secretKeyRef:
+            name: servicebus-secret
+            key: connectionString
+    ```
+  </Tab>
+  <Tab title="NATS JetStream">
+    ```yaml
+    apiVersion: dapr.io/v1alpha1
+    kind: Component
+    metadata:
+      name: order-pubsub
+    spec:
+      type: pubsub.jetstream
+      version: v1
+      metadata:
+        - name: natsURL
+          value: "nats://localhost:4222"
+        - name: name
+          value: "order-consumer"
+        - name: durableName
+          value: "order-durable"
+        - name: streamName
+          value: "ORDERS"
+    ```
+  </Tab>
+</Tabs>
+
+## Complete example: order events
+
+### Publisher — order-service
+
+<CodeGroup>
+
+```python publisher.py
+import requests
+
+DAPR_PORT = 3500
+PUBSUB = "order-pubsub"
+TOPIC = "orders"
+
+def publish_order(order_id: str, item: str, quantity: int):
+    event = {"orderId": order_id, "item": item, "quantity": quantity}
+    resp = requests.post(
+        f"http://localhost:{DAPR_PORT}/v1.0/publish/{PUBSUB}/{TOPIC}",
+        json=event,
+    )
+    resp.raise_for_status()
+    print(f"Published order {order_id}")
+
+publish_order("d6e5f6a0", "widget", 3)
+```
+
+```go publisher.go
+package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "fmt"
+    "net/http"
+)
+
+func publishOrder(orderID, item string, quantity int) error {
+    event := map[string]any{
+        "orderId":  orderID,
+        "item":     item,
+        "quantity": quantity,
+    }
+    body, _ := json.Marshal(event)
+    resp, err := http.Post(
+        "http://localhost:3500/v1.0/publish/order-pubsub/orders",
+        "application/json",
+        bytes.NewReader(body),
+    )
+    if err != nil {
+        return err
+    }
+    defer resp.Body.Close()
+    fmt.Printf("Published order %s, status: %s\n", orderID, resp.Status)
+    return nil
+}
+
+func main() {
+    publishOrder("d6e5f6a0", "widget", 3)
+}
+```
+
+</CodeGroup>
+
+### Subscriber — order-processor
+
+<CodeGroup>
+
+```python subscriber.py
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+@app.route("/dapr/subscribe", methods=["GET"])
+def subscribe():
+    return jsonify([
+        {
+            "pubsubname": "order-pubsub",
+            "topic": "orders",
+            "route": "/orders/process",
+        }
+    ])
+
+@app.route("/orders/process", methods=["POST"])
+def process_order():
+    envelope = request.json
+    order = envelope.get("data", {})
+    print(f"Processing order {order.get('orderId')} — {order.get('quantity')}x {order.get('item')}")
+    # Return 200 to acknowledge
+    return jsonify({"status": "SUCCESS"})
+
+if __name__ == "__main__":
+    app.run(port=6001)
+```
+
+```go subscriber.go
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "net/http"
+)
+
+type Subscription struct {
+    Pubsubname string `json:"pubsubname"`
+    Topic      string `json:"topic"`
+    Route      string `json:"route"`
+}
+
+type CloudEvent struct {
+    Data json.RawMessage `json:"data"`
+}
+
+type Order struct {
+    OrderID  string `json:"orderId"`
+    Item     string `json:"item"`
+    Quantity int    `json:"quantity"`
+}
+
+func main() {
+    http.HandleFunc("/dapr/subscribe", func(w http.ResponseWriter, r *http.Request) {
+        subs := []Subscription{{
+            Pubsubname: "order-pubsub",
+            Topic:      "orders",
+            Route:      "/orders/process",
+        }}
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(subs)
+    })
+
+    http.HandleFunc("/orders/process", func(w http.ResponseWriter, r *http.Request) {
+        var envelope CloudEvent
+        json.NewDecoder(r.Body).Decode(&envelope)
+
+        var order Order
+        json.Unmarshal(envelope.Data, &order)
+        fmt.Printf("Processing order %s — %dx %s\n", order.OrderID, order.Quantity, order.Item)
+
+        w.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(w).Encode(map[string]string{"status": "SUCCESS"})
+    })
+
+    http.ListenAndServe(":6001", nil)
+}
+```
+
+</CodeGroup>
+
+<Warning>
+  Your subscriber must respond to Dapr's delivery request within the configured timeout (default: 60 seconds). Long-running processing should be offloaded to a background goroutine or task queue, with immediate acknowledgment returned to Dapr.
+</Warning>

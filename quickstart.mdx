@@ -1,80 +1,297 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Install the Dapr CLI, initialize a local development environment, and call your first Dapr APIs in under five minutes."
+keywords: ["dapr", "quickstart", "getting started", "install", "dapr init", "state management", "service invocation"]
 ---
 
-## Get started in three steps
+This guide walks you through installing the Dapr CLI, initializing a self-hosted Dapr environment, and making your first calls to the state management and service invocation APIs.
 
-Get your documentation site running locally and make your first customization.
+<Info>
+  These steps use self-hosted mode, which runs Dapr as local processes — no Kubernetes required. Self-hosted mode is the recommended way to develop and test Dapr applications locally.
+</Info>
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+- [Docker](https://docs.docker.com/get-docker/) (used by `dapr init` to start Redis and Zipkin containers)
+- curl or any HTTP client
 
-### Step 2: Deploy your changes
+## Install and initialize Dapr
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+<Steps>
+  <Step title="Install the Dapr CLI">
+    The Dapr CLI manages local environments and wraps `daprd` for development use.
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    <Tabs>
+      <Tab title="Linux / macOS">
+        ```bash
+        wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash
+        ```
+      </Tab>
+      <Tab title="macOS (Homebrew)">
+        ```bash
+        brew install dapr/tap/dapr-cli
+        ```
+      </Tab>
+      <Tab title="Windows (PowerShell)">
+        ```powershell
+        powershell -Command "iwr -useb https://raw.githubusercontent.com/dapr/cli/master/install/install.ps1 | iex"
+        ```
+      </Tab>
+    </Tabs>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    Verify the installation:
 
-### Step 3: Go live
+    ```bash
+    dapr --version
+    ```
+  </Step>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+  <Step title="Initialize Dapr">
+    `dapr init` pulls the `daprd` binary and starts Docker containers for Redis (default state store and pub/sub broker) and Zipkin (distributed tracing).
+
+    ```bash
+    dapr init
+    ```
+
+    Expected output:
+
+    ```
+    Making the jump to hyperspace...
+    Installing runtime version 1.x.x
+    Downloading binaries and setting up components...
+    Downloaded & installed Dapr runtime successfully.
+    Installing placement service...
+    ✅  Success! Dapr is up and running.
+    ```
+
+    <Tip>
+      Components are written to `~/.dapr/components/` on Linux/macOS or `%USERPROFILE%\.dapr\components\` on Windows. You can edit them freely.
+    </Tip>
+  </Step>
+
+  <Step title="Verify the installation">
+    Check that the Dapr placement service and Redis containers are running:
+
+    ```bash
+    dapr status
+    docker ps
+    ```
+
+    You should see `dapr_redis` and `dapr_zipkin` containers alongside the placement service process.
+  </Step>
+</Steps>
+
+## Save and retrieve state
+
+Dapr's state management API stores key/value pairs in a pluggable backend. The default `dapr init` configuration points to Redis on `localhost:6379`.
+
+The HTTP API base URL for state is:
+
+```
+http://localhost:<daprPort>/v1.0/state/<storeName>
+```
+
+The default Dapr HTTP port is **3500** and the default store name after `dapr init` is **statestore**.
+
+<Steps>
+  <Step title="Start a Dapr sidecar">
+    Run a sidecar with no application attached (useful for testing APIs directly):
+
+    ```bash
+    dapr run --app-id myapp --dapr-http-port 3500
+    ```
+
+    Leave this terminal open.
+  </Step>
+
+  <Step title="Save state">
+    Open a new terminal and save a key/value pair:
+
+    <CodeGroup>
+
+    ```bash curl
+    curl -s -X POST http://localhost:3500/v1.0/state/statestore \
+      -H "Content-Type: application/json" \
+      -d '[{"key": "name", "value": "Bruce Wayne"}]'
+    ```
+
+    ```bash curl (bulk)
+    curl -s -X POST http://localhost:3500/v1.0/state/statestore \
+      -H "Content-Type: application/json" \
+      -d '[
+        {"key": "name",  "value": "Bruce Wayne"},
+        {"key": "alias", "value": "Batman"}
+      ]'
+    ```
+
+    </CodeGroup>
+
+    A successful save returns HTTP `204 No Content` with an empty body.
+  </Step>
+
+  <Step title="Get state">
+    Retrieve a value by key:
+
+    <CodeGroup>
+
+    ```bash curl
+    curl http://localhost:3500/v1.0/state/statestore/name
+    ```
+
+    ```bash Expected response
+    "Bruce Wayne"
+    ```
+
+    </CodeGroup>
+  </Step>
+
+  <Step title="Delete state">
+    Delete a key:
+
+    ```bash
+    curl -X DELETE http://localhost:3500/v1.0/state/statestore/name
+    ```
+  </Step>
+</Steps>
+
+<Tabs>
+  <Tab title="HTTP API">
+    The state endpoints used above map directly to the source-defined routes in the Dapr HTTP server:
+
+    | Operation | Method | Path |
+    |-----------|--------|------|
+    | Save state | `POST` | `/v1.0/state/{storeName}` |
+    | Get state | `GET` | `/v1.0/state/{storeName}/{key}` |
+    | Delete state | `DELETE` | `/v1.0/state/{storeName}/{key}` |
+    | Bulk get | `POST` | `/v1.0/state/{storeName}/bulk` |
+    | Transaction | `POST` | `/v1.0/state/{storeName}/transaction` |
+  </Tab>
+  <Tab title="Go SDK">
+    ```go
+    import (
+        dapr "github.com/dapr/go-sdk/client"
+    )
+
+    client, _ := dapr.NewClient()
+    defer client.Close()
+
+    // Save state
+    client.SaveState(ctx, "statestore", "name", []byte(`"Bruce Wayne"`), nil)
+
+    // Get state
+    item, _ := client.GetState(ctx, "statestore", "name", nil)
+    fmt.Println(string(item.Value)) // "Bruce Wayne"
+    ```
+  </Tab>
+  <Tab title="Python SDK">
+    ```python
+    from dapr.clients import DaprClient
+
+    with DaprClient() as client:
+        # Save state
+        client.save_state("statestore", "name", "Bruce Wayne")
+
+        # Get state
+        result = client.get_state("statestore", "name")
+        print(result.data)  # b'Bruce Wayne'
+    ```
+  </Tab>
+</Tabs>
+
+## Call a service
+
+Service invocation lets one Dapr-enabled application call another by **app ID**, without knowing its hostname or IP address. Dapr handles service discovery, retries, and mTLS.
+
+The HTTP pattern is:
+
+```
+http://localhost:<daprPort>/v1.0/invoke/<appId>/method/<method>
+```
+
+<Steps>
+  <Step title="Start two sidecars">
+    Open two terminals and start a sidecar for each simulated service:
+
+    **Terminal 1 — checkout service:**
+
+    ```bash
+    dapr run --app-id checkout --app-port 8080 --dapr-http-port 3500
+    ```
+
+    **Terminal 2 — order-processor service:**
+
+    ```bash
+    dapr run --app-id order-processor --app-port 8081 --dapr-http-port 3501
+    ```
+  </Step>
+
+  <Step title="Invoke the target service">
+    From the checkout sidecar (port 3500), call a method on `order-processor`:
+
+    <CodeGroup>
+
+    ```bash curl
+    curl -s http://localhost:3500/v1.0/invoke/order-processor/method/orders \
+      -H "Content-Type: application/json" \
+      -d '{"orderId": 42}'
+    ```
+
+    ```bash Expected response
+    # The response body is whatever order-processor returns from its /orders handler.
+    # Dapr forwards the full HTTP response, including status code and headers.
+    ```
+
+    </CodeGroup>
+
+    <Note>
+      Dapr routes the request to `order-processor` using name resolution (mDNS in self-hosted mode, Kubernetes DNS in cluster mode). If the target service is temporarily unavailable, Dapr retries according to the configured resiliency policy.
+    </Note>
+  </Step>
+</Steps>
+
+<Tabs>
+  <Tab title="HTTP API">
+    Service invocation uses the `invoke` endpoint group. Any HTTP verb is forwarded as-is to the target application:
+
+    ```
+    GET  /v1.0/invoke/{appId}/method/{method}
+    POST /v1.0/invoke/{appId}/method/{method}
+    PUT  /v1.0/invoke/{appId}/method/{method}
+    DELETE /v1.0/invoke/{appId}/method/{method}
+    ```
+
+    Headers, query parameters, and the request body are all forwarded to the target service.
+  </Tab>
+  <Tab title="Go SDK">
+    ```go
+    resp, _ := client.InvokeMethod(ctx, "order-processor", "orders", "post")
+    ```
+  </Tab>
+  <Tab title="Python SDK">
+    ```python
+    resp = client.invoke_method(
+        "order-processor",
+        "orders",
+        data=json.dumps({"orderId": 42}),
+        http_verb="POST",
+    )
+    ```
+  </Tab>
+</Tabs>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Core concepts" icon="book" href="/concepts">
+    Learn about building blocks, components, resiliency policies, and security in depth.
+  </Card>
+  <Card title="Building blocks" icon="cubes" href="/building-blocks/service-invocation">
+    Explore every Dapr API: pub/sub, workflows, actors, secrets, bindings, and more.
+  </Card>
+  <Card title="State management API" icon="database" href="/api/http/state">
+    Full HTTP API reference for state operations including transactions and ETags.
+  </Card>
+  <Card title="Deploy to Kubernetes" icon="dharmachakra" href="/operations/kubernetes">
+    Run Dapr in a Kubernetes cluster using the Helm chart and Dapr Operator.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>
